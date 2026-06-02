@@ -1,0 +1,80 @@
+"""Planner agent — takes an idea, produces a structured Plan with runtime detection."""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+from typing import Any
+
+from shared.providers import get_llm
+from src.dev_agent.pipeline.state import DevPipelineState, Plan
+
+logger = logging.getLogger(__name__)
+
+_PLANNER_PROMPT = """\
+You are a software architect. Given a user's app idea, produce a detailed project plan.
+
+IMPORTANT — Runtime detection rules:
+- "python" → for Flask, FastAPI, Django, scripts, CLI tools, data apps
+- "node" → for Express, Koa, Hapi, backend JavaScript/TypeScript servers
+- "react" → for React UI apps (use CDN imports from unpkg.com/react — do NOT use npm/webpack/vite)
+- "angular" → for Angular UI apps (use CDN imports from cdnjs.cloudflare.com — do NOT use npm/ng CLI)
+- "static" → for plain HTML/CSS/JS pages, landing pages, portfolios
+
+For React and Angular: generate a single index.html that loads the framework from CDN.
+Do NOT generate package.json or require any build step for React/Angular projects.
+
+The user's idea: {idea}
+
+Produce a plan with:
+- app_name: short snake_case name
+- runtime: one of python/node/react/angular/static
+- tech_stack: list of technologies used
+- tasks: list of implementation tasks
+- architecture_notes: brief architecture description
+- estimated_files: list of filenames that will be generated
+- entry_point: the main file to run/serve (e.g. main.py, server.js, index.html)
+"""
+
+
+async def planner_node(state: DevPipelineState) -> dict[str, Any]:
+    """LangGraph node: plan the project based on the user's idea."""
+    queue: asyncio.Queue | None = state.get("event_queue")
+
+    if queue:
+        await queue.put({"event": "agent_start", "agent": "planner"})
+
+    llm = get_llm(temperature=0.2)
+    structured_llm = llm.with_structured_output(Plan)
+
+    prompt = _PLANNER_PROMPT.format(idea=state["idea"])
+    plan: Plan = await structured_llm.ainvoke(prompt)  # type: ignore[assignment]
+
+    logger.info("Plan created: app=%s, runtime=%s, files=%d",
+                plan.app_name, plan.runtime, len(plan.estimated_files))
+
+    if queue:
+        await queue.put({
+            "event": "agent_output",
+            "agent": "planner",
+            "data": {
+                "app_name": plan.app_name,
+                "runtime": plan.runtime,
+                "tech_stack": plan.tech_stack,
+                "architecture": plan.architecture_notes,
+                "files": plan.estimated_files,
+                "entry_point": plan.entry_point,
+                "tasks": [t.title for t in plan.tasks],
+            },
+        })
+        await queue.put({
+            "event": "agent_complete",
+            "agent": "planner",
+            "data": {"app_name": plan.app_name, "runtime": plan.runtime},
+        })
+
+    return {
+        "plan": plan,
+        "runtime": plan.runtime,
+        "current_agent": "planner",
+    }

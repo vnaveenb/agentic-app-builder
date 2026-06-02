@@ -1,0 +1,34 @@
+# ── Core LangChain ────────────────────────────────────────────────────────────
+langchain-core==1.4.0
+langchain==1.3.2
+langchain-community==0.4.2
+
+# ── LLM providers (all swap-ready via LLM_PROVIDER env var) ───────────────────
+langchain-google-genai==4.2.4
+langchain-google-vertexai==3.2.3
+langchain-openai==1.2.2
+langchain-anthropic==1.4.4
+langchain-aws==1.5.0
+
+# ── Agentic framework ─────────────────────────────────────────────────────────
+langgraph==1.2.2
+
+# ── Web framework ─────────────────────────────────────────────────────────────
+fastapi==0.136.3
+uvicorn[standard]==0.48.0
+flask==3.1.1
+pydantic==2.13.4
+httpx==0.28.1
+
+# ── Async I/O ─────────────────────────────────────────────────────────────────
+aiofiles==24.1.0
+
+# ── Observability ─────────────────────────────────────────────────────────────
+langsmith==0.8.8
+python-dotenv==1.2.2
+
+# ── Dev / CI ──────────────────────────────────────────────────────────────────
+ruff==0.15.15
+mypy==2.1.0
+pytest==9.0.3
+pytest-asyncio==1.4.0

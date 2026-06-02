@@ -1,0 +1,50 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "project-7-ai-dev-agent"
+version = "0.1.0"
+description = "Multi-agent pipeline that generates working apps in Python, Node.js, React, Angular, or HTML/JS with live preview"
+requires-python = ">=3.12"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["src*", "shared*"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+src = ["src", "shared", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "B", "C4", "UP"]
+ignore = ["E501", "B008"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["src", "shared"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = false
+ignore_missing_imports = true
+disallow_untyped_defs = true
+warn_return_any = true
+warn_unused_ignores = true
+
+[[tool.mypy.overrides]]
+module = [
+    "langchain.*", "langchain_core.*", "langchain_google_genai.*",
+    "langchain_google_vertexai.*", "langchain_openai.*", "langchain_anthropic.*",
+    "langchain_aws.*", "langchain_community.*", "langgraph.*",
+    "fastapi.*", "uvicorn.*", "aiofiles.*",
+]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-v --tb=short"
+markers = [
+    "unit: fast tests with no network or LLM calls",
+    "integration: requires live API keys and running services",
+]

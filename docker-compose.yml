@@ -1,0 +1,9 @@
+services:
+  app:
+    build: .
+    ports:
+      - "8007:8007"
+      - "9100-9120:9100-9120"
+    env_file:
+      - .env
+    restart: unless-stopped
