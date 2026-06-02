@@ -1,4 +1,4 @@
-# 🤖 Project 7: AI Dev Agent
+# 🤖 Agentic App Builder
 
 <div align="center">
 
