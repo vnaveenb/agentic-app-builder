@@ -4,7 +4,7 @@ build-backend = "setuptools.backends.legacy:build"
 
 [project]
 name = "project-7-ai-dev-agent"
-version = "0.1.0"
+version = "0.1.1"
 description = "Multi-agent pipeline that generates working apps in Python, Node.js, React, Angular, or HTML/JS with live preview"
 requires-python = ">=3.12"
 
