@@ -6,7 +6,7 @@ import asyncio
 from functools import partial
 from typing import Any
 
-from src.dev_agent.pipeline.state import TestReport
+from src.dev_agent.pipeline.state import TestCase, TestReport
 from src.dev_agent.sandbox.base import SandboxRunner
 from src.dev_agent.sandbox.base import TestReport as SandboxTestReport
 from src.dev_agent.sandbox.node_runner import NodeRunner
@@ -47,7 +47,11 @@ async def run_tests_in_sandbox(
         error_count=sandbox_report.error_count,
         output_summary=sandbox_report.output_summary,
         test_cases=[
-            {"name": tc.get("name", ""), "passed": tc.get("passed", False), "error_message": tc.get("error_message", "")}
+            TestCase(
+                name=str(tc.get("name", "")),
+                passed=bool(tc.get("passed", False)),
+                error_message=str(tc.get("error_message", ""))
+            )
             for tc in sandbox_report.test_cases
         ],
         execution_time_ms=sandbox_report.execution_time_ms,

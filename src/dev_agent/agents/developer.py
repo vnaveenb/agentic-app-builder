@@ -132,6 +132,8 @@ async def developer_node(state: DevPipelineState) -> dict[str, Any]:
     """LangGraph node: generate code files based on the plan."""
     queue: asyncio.Queue | None = state.get("event_queue")
     plan = state["plan"]
+    if plan is None:
+        raise ValueError("Plan is missing")
     iteration = state["iteration"]
 
     if queue:
@@ -142,9 +144,10 @@ async def developer_node(state: DevPipelineState) -> dict[str, Any]:
 
     # On loop-back: include failure feedback
     feedback_section = ""
-    if iteration > 0 and state.get("test_report"):
+    tr = state.get("test_report")
+    if iteration > 0 and tr is not None:
         feedback_section = _FEEDBACK_TEMPLATE.format(
-            output_summary=state["test_report"].output_summary[:2000]
+            output_summary=tr.output_summary[:2000]
         )
 
     # User iteration feedback (from /iterate endpoint)
@@ -173,12 +176,15 @@ async def developer_node(state: DevPipelineState) -> dict[str, Any]:
 
     for attempt in range(3):
         try:
-            raw_response = await structured_llm.ainvoke(prompt)  # type: ignore[assignment]
-            if raw_response.get("parsed"):
-                result = raw_response["parsed"]
-                break
-            # Fallback: try to repair truncated/malformed JSON from raw output
-            raw_text = raw_response.get("raw", "")
+            raw_response = await structured_llm.ainvoke(prompt)
+            if isinstance(raw_response, dict):
+                if raw_response.get("parsed"):
+                    result = raw_response["parsed"]
+                    break
+                # Fallback: try to repair truncated/malformed JSON from raw output
+                raw_text = raw_response.get("raw", "")
+            else:
+                raw_text = raw_response
             if hasattr(raw_text, "content"):
                 raw_text = raw_text.content
             result = _repair_parse(str(raw_text))

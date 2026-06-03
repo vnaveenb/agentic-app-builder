@@ -203,8 +203,9 @@ def download(session_id: str) -> StreamingResponse:
     buf.seek(0)
 
     app_name = "project"
-    if state.get("plan"):
-        app_name = state["plan"].app_name
+    plan = state.get("plan")
+    if plan:
+        app_name = plan.app_name
 
     return StreamingResponse(
         buf,
@@ -282,27 +283,27 @@ def get_history(session_id: str) -> dict[str, Any]:
     history = _session_histories.get(session_id, [])
     # Return minimal metadata to populate a UI list
     versions = [
-        {"version": h["version"], "timestamp": h.get("timestamp", ""), "description": h.get("description", f"Version {h['version']}"), "is_current": h.get("is_current", False)} 
+        {"version": h["version"], "timestamp": h.get("timestamp", ""), "description": h.get("description", f"Version {h['version']}"), "is_current": h.get("is_current", False)}
         for h in history
     ]
     return {"versions": versions}
 
 
 @app.post("/checkout/{session_id}/{version}")
-async def checkout_version(session_id: str, version: int) -> dict[str, str]:
+async def checkout_version(session_id: str, version: int) -> dict[str, Any]:
     state = _session_states.get(session_id)
     history = _session_histories.get(session_id, [])
     if not state or not history:
         raise HTTPException(404, "Session or history not found")
-    
+
     target = next((h for h in history if h["version"] == version), None)
     if not target:
         raise HTTPException(404, "Version not found")
-        
+
     state["files"] = target["files"]
     for h in history:
         h["is_current"] = (h["version"] == version)
-        
+
     # If preview is active, restart it with new files
     if session_id in preview_server._allocated_ports:
         runner = get_runner(state["runtime"])
@@ -311,14 +312,14 @@ async def checkout_version(session_id: str, version: int) -> dict[str, str]:
             await preview_server.start_preview(session_id, state["files"], runner)
         except RuntimeError:
             pass
-            
+
         queue = _event_queues.get(session_id)
         if queue:
             try:
                 queue.put_nowait({"event": "preview_reload"})
             except asyncio.QueueFull:
                 pass
-                
+
     return {"status": "checked_out", "version": version, "files": state["files"]}
 
 
@@ -372,7 +373,6 @@ async def preview_proxy(session_id: str, path: str, request: Request) -> Respons
     # Retry with short backoff — the preview may still be binding
     body = await request.body()
     async with httpx.AsyncClient(timeout=10.0) as client:
-        last_err: Exception | None = None
         for attempt in range(3):
             try:
                 resp = await client.request(
@@ -394,8 +394,7 @@ async def preview_proxy(session_id: str, path: str, request: Request) -> Respons
                     status_code=resp.status_code,
                     headers=headers,
                 )
-            except httpx.ConnectError as exc:
-                last_err = exc
+            except httpx.ConnectError:
                 if attempt < 2:
                     await asyncio.sleep(1.0)
 
@@ -496,7 +495,7 @@ async def _run_iterate_task(
         v_num = len(history) + 1
         for h in history:
             h["is_current"] = False
-            
+
         history.append({
             "version": v_num,
             "description": f"Iteration {v_num - 1}",

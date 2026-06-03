@@ -84,9 +84,11 @@ async def test_developer_increments_iteration() -> None:
     mock_structured = MagicMock()
 
     # The developer uses _DeveloperOutput internally, mock accordingly
-    fake_result = MagicMock()
-    fake_result.files = [MagicMock(filename="app.py", content="print('hello')")]
-    fake_result.implementation_notes = "Done"
+    fake_parsed = MagicMock()
+    fake_parsed.files = [MagicMock(filename="app.py", content="print('hello')")]
+    fake_parsed.implementation_notes = "Done"
+    # Because include_raw=True, the mock should return a dict
+    fake_result = {"parsed": fake_parsed, "raw": ""}
     mock_structured.ainvoke = AsyncMock(return_value=fake_result)
     mock_llm.with_structured_output.return_value = mock_structured
 

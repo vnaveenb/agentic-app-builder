@@ -6,7 +6,7 @@ import asyncio
 import logging
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from shared.providers import get_llm
 from src.dev_agent.pipeline.state import DevPipelineState
@@ -45,6 +45,8 @@ async def reviewer_node(state: DevPipelineState) -> dict[str, Any]:
     queue: asyncio.Queue | None = state.get("event_queue")
     files = state["files"]
     plan = state["plan"]
+    if plan is None:
+        raise ValueError("Plan is missing")
 
     if queue:
         await queue.put({"event": "agent_start", "agent": "reviewer"})
@@ -56,8 +58,8 @@ async def reviewer_node(state: DevPipelineState) -> dict[str, Any]:
         files_summary += f"\n--- {fname} ---\n{truncated}\n"
 
     test_summary = "No tests run"
-    if state.get("test_report"):
-        tr = state["test_report"]
+    tr = state.get("test_report")
+    if tr is not None:
         test_summary = f"passed={tr.passed_count}, failed={tr.failed_count}, critical_bugs={tr.has_critical_bugs}"
 
     prompt = _REVIEWER_PROMPT.format(

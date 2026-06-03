@@ -176,7 +176,6 @@ class PythonRunner(SandboxRunner):
 
         # Log stderr to file for debugging preview failures
         stderr_log = tmp / "_preview_stderr.log"
-        stderr_fh = stderr_log.open("w", encoding="utf-8")
 
         if "FastAPI" in source or "Starlette" in source:
             # Strip server-start calls so uvicorn CLI controls the port
