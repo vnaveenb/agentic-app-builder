@@ -6,7 +6,7 @@ import asyncio
 import logging
 from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from shared.providers import get_llm
 from src.dev_agent.pipeline.state import DevPipelineState

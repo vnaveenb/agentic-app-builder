@@ -19,7 +19,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, Response, StreamingResponse
 
 from src.dev_agent.pipeline.executor import get_runner
-from src.dev_agent.pipeline.graph import run_iterate_pipeline, run_pipeline
+from src.dev_agent.pipeline.graph import _GRAPH, _ITERATE_GRAPH
 from src.dev_agent.pipeline.state import DevPipelineState
 from src.dev_agent.sandbox import preview_server
 from src.dev_agent.schemas import (
@@ -41,6 +41,7 @@ _SUPPORTED_RUNTIMES = ["python", "node", "react", "angular", "static"]
 
 _event_queues: dict[str, asyncio.Queue[dict[str, Any]]] = {}
 _session_states: dict[str, DevPipelineState] = {}
+_session_histories: dict[str, list[dict[str, Any]]] = {}
 
 
 # ── Console capture injection ─────────────────────────────────────────────────
@@ -276,6 +277,51 @@ async def iterate(session_id: str, req: IterateRequest) -> GenerateResponse:
     return GenerateResponse(session_id=session_id)
 
 
+@app.get("/history/{session_id}")
+def get_history(session_id: str) -> dict[str, Any]:
+    history = _session_histories.get(session_id, [])
+    # Return minimal metadata to populate a UI list
+    versions = [
+        {"version": h["version"], "timestamp": h.get("timestamp", ""), "description": h.get("description", f"Version {h['version']}"), "is_current": h.get("is_current", False)} 
+        for h in history
+    ]
+    return {"versions": versions}
+
+
+@app.post("/checkout/{session_id}/{version}")
+async def checkout_version(session_id: str, version: int) -> dict[str, str]:
+    state = _session_states.get(session_id)
+    history = _session_histories.get(session_id, [])
+    if not state or not history:
+        raise HTTPException(404, "Session or history not found")
+    
+    target = next((h for h in history if h["version"] == version), None)
+    if not target:
+        raise HTTPException(404, "Version not found")
+        
+    state["files"] = target["files"]
+    for h in history:
+        h["is_current"] = (h["version"] == version)
+        
+    # If preview is active, restart it with new files
+    if session_id in preview_server._allocated_ports:
+        runner = get_runner(state["runtime"])
+        preview_server.stop_preview(session_id, runner)
+        try:
+            await preview_server.start_preview(session_id, state["files"], runner)
+        except RuntimeError:
+            pass
+            
+        queue = _event_queues.get(session_id)
+        if queue:
+            try:
+                queue.put_nowait({"event": "preview_reload"})
+            except asyncio.QueueFull:
+                pass
+                
+    return {"status": "checked_out", "version": version, "files": state["files"]}
+
+
 # ── Preview endpoints ─────────────────────────────────────────────────────────
 
 
@@ -375,9 +421,32 @@ async def _run_pipeline_task(
 ) -> None:
     """Run the full agent pipeline as a background task."""
     try:
-        final_state = await run_pipeline(initial_state)
+        final_state = initial_state
+        async for chunk in _GRAPH.astream(initial_state, stream_mode=["values", "messages"], version="v2"):
+            if chunk["type"] == "messages":
+                msg, metadata = chunk["data"]
+                if msg.content:
+                    node_name = metadata.get("langgraph_node", "system")
+                    await queue.put({
+                        "event": "llm_chunk",
+                        "agent": node_name,
+                        "chunk": msg.content,
+                    })
+            elif chunk["type"] == "values":
+                final_state = chunk["data"]
+
         _session_states[session_id] = final_state
         _session_states[session_id]["status"] = "done"
+
+        # Record initial version in history
+        if session_id not in _session_histories:
+            _session_histories[session_id] = []
+        _session_histories[session_id].append({
+            "version": 1,
+            "description": "Initial Build",
+            "files": dict(final_state.get("files", {})),
+            "is_current": True
+        })
 
         # Push completion event with files embedded
         await queue.put({
@@ -404,10 +473,37 @@ async def _run_iterate_task(
 ) -> None:
     """Run the iterate pipeline (developer → tester → reviewer) as a background task."""
     try:
-        final_state = await run_iterate_pipeline(state)
+        final_state = state
+        async for chunk in _ITERATE_GRAPH.astream(state, stream_mode=["values", "messages"], version="v2"):
+            if chunk["type"] == "messages":
+                msg, metadata = chunk["data"]
+                if msg.content:
+                    node_name = metadata.get("langgraph_node", "system")
+                    await queue.put({
+                        "event": "llm_chunk",
+                        "agent": node_name,
+                        "chunk": msg.content,
+                    })
+            elif chunk["type"] == "values":
+                final_state = chunk["data"]
+
         _session_states[session_id] = final_state
         _session_states[session_id]["status"] = "done"
         _session_states[session_id]["user_feedback"] = ""  # Clear after use
+
+        # Record iteration in history
+        history = _session_histories.get(session_id, [])
+        v_num = len(history) + 1
+        for h in history:
+            h["is_current"] = False
+            
+        history.append({
+            "version": v_num,
+            "description": f"Iteration {v_num - 1}",
+            "files": dict(final_state.get("files", {})),
+            "is_current": True
+        })
+        _session_histories[session_id] = history
 
         await queue.put({
             "event": "pipeline_done",
