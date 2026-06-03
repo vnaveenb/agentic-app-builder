@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import pathlib
 import signal
@@ -10,7 +11,9 @@ import subprocess
 import tempfile
 import time
 
-from src.dev_agent.sandbox.base import SandboxRunner, TestReport, emit_terminal
+from src.dev_agent.sandbox.base import PreviewInfo, SandboxRunner, TestReport, emit_terminal
+
+logger = logging.getLogger(__name__)
 
 
 class StaticRunner(SandboxRunner):
@@ -47,7 +50,7 @@ class StaticRunner(SandboxRunner):
             execution_time_ms=elapsed_ms,
         )
 
-    def start_preview(self, files: dict[str, str], port: int) -> int:
+    def start_preview(self, files: dict[str, str], port: int) -> PreviewInfo:
         """Serve static files using Python's built-in HTTP server."""
         tmpdir = tempfile.mkdtemp(prefix="dev_agent_preview_static_")
         tmp = pathlib.Path(tmpdir)
@@ -56,13 +59,28 @@ class StaticRunner(SandboxRunner):
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(content, encoding="utf-8")
 
+        # If index.html is nested (e.g. src/index.html, public/index.html)
+        # but not at root, copy it to root so http.server can find it
+        if not (tmp / "index.html").exists():
+            for name in files:
+                if name.endswith("index.html") and name != "index.html":
+                    (tmp / "index.html").write_text(files[name], encoding="utf-8")
+                    logger.info("Copied nested %s to tmpdir root", name)
+                    break
+
+        logger.info("StaticRunner preview: port=%d, files=%s", port, list(files.keys()))
+
+        # Log stderr for debugging; stdout to DEVNULL to prevent pipe stalls
+        stderr_log = tmp / "_preview_stderr.log"
+        stderr_fh = stderr_log.open("w", encoding="utf-8")
+
         proc = subprocess.Popen(
             ["python", "-m", "http.server", str(port), "--bind", "0.0.0.0"],
             cwd=tmpdir,
             stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
+            stderr=stderr_fh,
         )
-        return proc.pid
+        return PreviewInfo(pid=proc.pid, tmpdir=tmpdir)
 
     def stop_preview(self, pid: int) -> None:
         try:

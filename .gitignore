@@ -38,4 +38,5 @@ node_modules/
 
 # Generated zip files
 *.zip
-
+streaming-tokens.md
+design.skill.md

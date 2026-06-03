@@ -8,6 +8,14 @@ from dataclasses import dataclass
 
 
 @dataclass
+class PreviewInfo:
+    """Returned by start_preview — carries both PID and tmpdir for cleanup."""
+
+    pid: int
+    tmpdir: str
+
+
+@dataclass
 class TestReport:
     """Lightweight test result used by sandbox runners (mirrors pipeline state model)."""
 
@@ -41,8 +49,8 @@ class SandboxRunner(ABC):
         ...
 
     @abstractmethod
-    def start_preview(self, files: dict[str, str], port: int) -> int:
-        """Start a preview server on given port. Returns PID. Blocking."""
+    def start_preview(self, files: dict[str, str], port: int) -> PreviewInfo:
+        """Start a preview server on given port. Returns PreviewInfo. Blocking."""
         ...
 
     @abstractmethod

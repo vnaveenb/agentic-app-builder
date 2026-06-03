@@ -48,15 +48,15 @@ async def tester_node(state: DevPipelineState) -> dict[str, Any]:
         sandbox_report.has_critical_bugs,
     )
 
-    # Step 2: LLM static analysis (truncate code to 2000 chars/file)
+    # Step 2: LLM static analysis (truncate code to 4000 chars/file)
     files_summary = ""
     for fname, code in files.items():
-        truncated = code[:2000] + ("..." if len(code) > 2000 else "")
+        truncated = code[:4000] + ("..." if len(code) > 4000 else "")
         files_summary += f"\n--- {fname} ---\n{truncated}\n"
 
     prompt = _STATIC_ANALYSIS_PROMPT.format(
         runtime=runtime,
-        files_summary=files_summary[:12000],  # Overall limit
+        files_summary=files_summary[:20000],  # Overall limit
     )
 
     try:

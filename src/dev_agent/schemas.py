@@ -16,6 +16,7 @@ class GenerateRequest(BaseModel):
     idea: str
     runtime: str = "auto"
     max_iterations: int = Field(default=2, ge=1, le=5)
+    backend: str = Field(default="langgraph", pattern="^(langgraph|crewai)$")
 
 
 class GenerateResponse(BaseModel):

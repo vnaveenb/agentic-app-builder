@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any, cast
 
 from langgraph.graph import END, StateGraph
@@ -10,6 +11,7 @@ from src.dev_agent.agents.developer import developer_node
 from src.dev_agent.agents.planner import planner_node
 from src.dev_agent.agents.reviewer import reviewer_node
 from src.dev_agent.agents.tester import tester_node
+from src.dev_agent.pipeline.base import PipelineBackend
 from src.dev_agent.pipeline.state import DevPipelineState
 
 
@@ -65,6 +67,59 @@ def build_iterate_graph() -> Any:
 
 
 _ITERATE_GRAPH = build_iterate_graph()
+
+
+class LangGraphBackend(PipelineBackend):
+    """LangGraph-based orchestration backend (state machine)."""
+
+    async def run(
+        self,
+        state: DevPipelineState,
+        queue: asyncio.Queue[dict[str, Any]],
+    ) -> DevPipelineState:
+        """Execute the full pipeline using LangGraph's astream."""
+        final_state = state
+        async for chunk in _GRAPH.astream(
+            state, stream_mode=["values", "messages"], version="v2"
+        ):
+            if chunk["type"] == "messages":
+                msg, metadata = chunk["data"]
+                if msg.content:
+                    node_name = metadata.get("langgraph_node", "system")
+                    await queue.put({
+                        "event": "llm_chunk",
+                        "agent": node_name,
+                        "chunk": msg.content,
+                    })
+            elif chunk["type"] == "values":
+                final_state = chunk["data"]
+        return cast(DevPipelineState, final_state)
+
+    async def run_iterate(
+        self,
+        state: DevPipelineState,
+        queue: asyncio.Queue[dict[str, Any]],
+    ) -> DevPipelineState:
+        """Execute the iterate pipeline (skip planner) using LangGraph's astream."""
+        final_state = state
+        async for chunk in _ITERATE_GRAPH.astream(
+            state, stream_mode=["values", "messages"], version="v2"
+        ):
+            if chunk["type"] == "messages":
+                msg, metadata = chunk["data"]
+                if msg.content:
+                    node_name = metadata.get("langgraph_node", "system")
+                    await queue.put({
+                        "event": "llm_chunk",
+                        "agent": node_name,
+                        "chunk": msg.content,
+                    })
+            elif chunk["type"] == "values":
+                final_state = chunk["data"]
+        return cast(DevPipelineState, final_state)
+
+
+# ── Legacy helpers (kept for backwards compatibility with tests) ──────────────
 
 
 async def run_pipeline(state: DevPipelineState) -> DevPipelineState:

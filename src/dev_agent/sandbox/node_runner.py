@@ -12,7 +12,7 @@ import subprocess
 import tempfile
 import time
 
-from src.dev_agent.sandbox.base import SandboxRunner, TestReport, emit_terminal
+from src.dev_agent.sandbox.base import PreviewInfo, SandboxRunner, TestReport, emit_terminal
 
 logger = logging.getLogger(__name__)
 
@@ -110,7 +110,7 @@ class NodeRunner(SandboxRunner):
         elapsed_ms = int((time.monotonic() - start) * 1000)
         return _parse_node_output(output, return_code, elapsed_ms)
 
-    def start_preview(self, files: dict[str, str], port: int) -> int:
+    def start_preview(self, files: dict[str, str], port: int) -> PreviewInfo:
         """Start Node.js server or serve static React/Angular files."""
         tmpdir = tempfile.mkdtemp(prefix="dev_agent_preview_node_")
         tmp = pathlib.Path(tmpdir)
@@ -168,7 +168,7 @@ class NodeRunner(SandboxRunner):
                 stdout=subprocess.DEVNULL,
                 stderr=stderr_fh,
             )
-        return proc.pid
+        return PreviewInfo(pid=proc.pid, tmpdir=tmpdir)
 
     def stop_preview(self, pid: int) -> None:
         try:

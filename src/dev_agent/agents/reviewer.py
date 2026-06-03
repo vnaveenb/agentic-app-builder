@@ -33,7 +33,7 @@ Your job:
 1. Fix any remaining minor issues (formatting, naming, edge cases)
 2. Add helpful comments where code is complex
 3. Ensure the code follows best practices for the runtime
-4. Return ALL files (even unchanged ones) in improved_files
+4. Return ONLY the files you modified in improved_files — do NOT include unchanged files
 5. Provide review_notes: a list of 3-5 observations about the code quality
 
 Do NOT make breaking changes. Keep the same functionality.
@@ -51,11 +51,10 @@ async def reviewer_node(state: DevPipelineState) -> dict[str, Any]:
     if queue:
         await queue.put({"event": "agent_start", "agent": "reviewer"})
 
-    # Build file summary (truncate for token limits)
+    # Build file summary — send full content so the LLM can review properly
     files_summary = ""
     for fname, code in files.items():
-        truncated = code[:3000] + ("..." if len(code) > 3000 else "")
-        files_summary += f"\n--- {fname} ---\n{truncated}\n"
+        files_summary += f"\n--- {fname} ---\n{code}\n"
 
     test_summary = "No tests run"
     tr = state.get("test_report")
@@ -66,15 +65,20 @@ async def reviewer_node(state: DevPipelineState) -> dict[str, Any]:
         app_name=plan.app_name,
         runtime=state["runtime"],
         test_summary=test_summary,
-        files_summary=files_summary[:15000],
+        files_summary=files_summary[:30000],
     )
 
     llm = get_llm(temperature=0.3)
     structured_llm = llm.with_structured_output(_ReviewOutput)
     result: _ReviewOutput = await structured_llm.ainvoke(prompt)  # type: ignore[assignment]
 
-    logger.info("Reviewer produced %d files, %d notes",
-                len(result.improved_files), len(result.review_notes))
+    # Merge: start with ALL original files, then overlay reviewer's modifications.
+    # This prevents the old bug where unmodified files were silently dropped.
+    merged_files = dict(files)
+    merged_files.update(result.improved_files)
+
+    logger.info("Reviewer modified %d/%d files, %d notes",
+                len(result.improved_files), len(files), len(result.review_notes))
 
     if queue:
         await queue.put({
@@ -92,7 +96,7 @@ async def reviewer_node(state: DevPipelineState) -> dict[str, Any]:
         })
 
     return {
-        "files": result.improved_files,
+        "files": merged_files,
         "review_notes": result.review_notes,
         "status": "done",
         "current_agent": "reviewer",

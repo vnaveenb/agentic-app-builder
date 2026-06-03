@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [master, develop]
-  pull_request:
-    branches: [master]
+    tags:
+      - 'v*'
+  workflow_dispatch:
 
 jobs:
   lint-typecheck-test:
@@ -51,6 +51,7 @@ jobs:
           push: ${{ github.event_name != 'pull_request' }}
           tags: |
             ghcr.io/${{ github.repository_owner }}/ai-dev-agent:${{ github.sha }}
+            ghcr.io/${{ github.repository_owner }}/ai-dev-agent:${{ github.ref_name }}
             ghcr.io/${{ github.repository_owner }}/ai-dev-agent:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max

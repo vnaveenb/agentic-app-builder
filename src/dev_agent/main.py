@@ -18,8 +18,10 @@ import httpx
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, Response, StreamingResponse
 
-from src.dev_agent.pipeline.executor import get_runner
-from src.dev_agent.pipeline.graph import _GRAPH, _ITERATE_GRAPH
+from src.dev_agent.pipeline.base import PipelineBackend
+from src.dev_agent.pipeline.crew_backend import CrewAIBackend
+from src.dev_agent.pipeline.executor import get_runner, get_runner_for_files
+from src.dev_agent.pipeline.graph import LangGraphBackend
 from src.dev_agent.pipeline.state import DevPipelineState
 from src.dev_agent.sandbox import preview_server
 from src.dev_agent.schemas import (
@@ -37,11 +39,25 @@ logger = logging.getLogger(__name__)
 _UI = pathlib.Path(__file__).parent / "static" / "index.html"
 _SUPPORTED_RUNTIMES = ["python", "node", "react", "angular", "static"]
 
+# ── Backend factory ───────────────────────────────────────────────────────────
+
+_backends: dict[str, PipelineBackend] = {
+    "langgraph": LangGraphBackend(),
+    "crewai": CrewAIBackend(),
+}
+
+
+def get_backend(name: str) -> PipelineBackend:
+    """Return the requested pipeline backend, defaulting to LangGraph."""
+    return _backends.get(name, _backends["langgraph"])
+
+
 # ── In-memory session stores ──────────────────────────────────────────────────
 
 _event_queues: dict[str, asyncio.Queue[dict[str, Any]]] = {}
 _session_states: dict[str, DevPipelineState] = {}
 _session_histories: dict[str, list[dict[str, Any]]] = {}
+_session_backends: dict[str, str] = {}
 
 
 # ── Console capture injection ─────────────────────────────────────────────────
@@ -145,8 +161,9 @@ async def generate(req: GenerateRequest) -> GenerateResponse:
         "user_feedback": "",
     }
     _session_states[session_id] = initial_state
+    _session_backends[session_id] = req.backend
 
-    asyncio.create_task(_run_pipeline_task(session_id, initial_state, queue))
+    asyncio.create_task(_run_pipeline_task(session_id, initial_state, queue, req.backend))
 
     return GenerateResponse(session_id=session_id)
 
@@ -273,7 +290,7 @@ async def iterate(session_id: str, req: IterateRequest) -> GenerateResponse:
     state["errors"] = []
     state["event_queue"] = queue
 
-    asyncio.create_task(_run_iterate_task(session_id, state, queue))
+    asyncio.create_task(_run_iterate_task(session_id, state, queue, _session_backends.get(session_id, "langgraph")))
 
     return GenerateResponse(session_id=session_id)
 
@@ -334,7 +351,10 @@ async def preview_start(session_id: str) -> PreviewStartResponse:
     if state["status"] != "done":
         raise HTTPException(400, "Pipeline not complete — cannot start preview")
 
-    runner = get_runner(state["runtime"])
+    # Use smart runner selection that considers both runtime AND actual files
+    runner = get_runner_for_files(state["runtime"], state["files"])
+    logger.info("Preview start: runtime=%s, runner=%s, files=%s",
+                state["runtime"], type(runner).__name__, list(state["files"].keys()))
     try:
         info = await preview_server.start_preview(session_id, state["files"], runner)
     except RuntimeError as exc:
@@ -370,10 +390,11 @@ async def preview_proxy(session_id: str, path: str, request: Request) -> Respons
     port = preview_server._allocated_ports[session_id]
     target_url = f"http://127.0.0.1:{port}/{path}"
 
-    # Retry with short backoff — the preview may still be binding
+    # Retry with exponential backoff — the preview may still be binding
     body = await request.body()
+    backoff_schedule = [0.5, 1.0, 2.0, 3.0, 4.0]  # 5 retries, ~10.5s total
     async with httpx.AsyncClient(timeout=10.0) as client:
-        for attempt in range(3):
+        for attempt, delay in enumerate(backoff_schedule):
             try:
                 resp = await client.request(
                     method=request.method,
@@ -395,8 +416,8 @@ async def preview_proxy(session_id: str, path: str, request: Request) -> Respons
                     headers=headers,
                 )
             except httpx.ConnectError:
-                if attempt < 2:
-                    await asyncio.sleep(1.0)
+                if attempt < len(backoff_schedule) - 1:
+                    await asyncio.sleep(delay)
 
     # All retries failed — check if the process died
     pid = preview_server._active_pids.get(session_id)
@@ -404,10 +425,12 @@ async def preview_proxy(session_id: str, path: str, request: Request) -> Respons
         try:
             os.kill(pid, 0)
         except OSError:
+            logger.error("Preview process pid=%d crashed for session %s", pid, session_id[:12])
             raise HTTPException(
                 502, "Preview process crashed — check logs for details"
             ) from None
-    raise HTTPException(502, "Preview server not ready yet") from None
+    logger.error("Preview proxy exhausted retries for session %s port %d", session_id[:12], port)
+    raise HTTPException(502, f"Preview server on port {port} not responding after {len(backoff_schedule)} retries") from None
 
 
 # ── Background task ───────────────────────────────────────────────────────────
@@ -417,22 +440,12 @@ async def _run_pipeline_task(
     session_id: str,
     initial_state: DevPipelineState,
     queue: asyncio.Queue[dict[str, Any]],
+    backend_name: str = "langgraph",
 ) -> None:
     """Run the full agent pipeline as a background task."""
     try:
-        final_state = initial_state
-        async for chunk in _GRAPH.astream(initial_state, stream_mode=["values", "messages"], version="v2"):
-            if chunk["type"] == "messages":
-                msg, metadata = chunk["data"]
-                if msg.content:
-                    node_name = metadata.get("langgraph_node", "system")
-                    await queue.put({
-                        "event": "llm_chunk",
-                        "agent": node_name,
-                        "chunk": msg.content,
-                    })
-            elif chunk["type"] == "values":
-                final_state = chunk["data"]
+        backend = get_backend(backend_name)
+        final_state = await backend.run(initial_state, queue)
 
         _session_states[session_id] = final_state
         _session_states[session_id]["status"] = "done"
@@ -442,7 +455,7 @@ async def _run_pipeline_task(
             _session_histories[session_id] = []
         _session_histories[session_id].append({
             "version": 1,
-            "description": "Initial Build",
+            "description": f"Initial Build ({backend_name})",
             "files": dict(final_state.get("files", {})),
             "is_current": True
         })
@@ -453,6 +466,7 @@ async def _run_pipeline_task(
             "files": final_state["files"],
             "runtime": final_state["runtime"],
             "review_notes": final_state.get("review_notes", []),
+            "backend": backend_name,
         })
 
     except Exception as exc:
@@ -469,22 +483,12 @@ async def _run_iterate_task(
     session_id: str,
     state: DevPipelineState,
     queue: asyncio.Queue[dict[str, Any]],
+    backend_name: str = "langgraph",
 ) -> None:
     """Run the iterate pipeline (developer → tester → reviewer) as a background task."""
     try:
-        final_state = state
-        async for chunk in _ITERATE_GRAPH.astream(state, stream_mode=["values", "messages"], version="v2"):
-            if chunk["type"] == "messages":
-                msg, metadata = chunk["data"]
-                if msg.content:
-                    node_name = metadata.get("langgraph_node", "system")
-                    await queue.put({
-                        "event": "llm_chunk",
-                        "agent": node_name,
-                        "chunk": msg.content,
-                    })
-            elif chunk["type"] == "values":
-                final_state = chunk["data"]
+        backend = get_backend(backend_name)
+        final_state = await backend.run_iterate(state, queue)
 
         _session_states[session_id] = final_state
         _session_states[session_id]["status"] = "done"
@@ -498,7 +502,7 @@ async def _run_iterate_task(
 
         history.append({
             "version": v_num,
-            "description": f"Iteration {v_num - 1}",
+            "description": f"Iteration {v_num - 1} ({backend_name})",
             "files": dict(final_state.get("files", {})),
             "is_current": True
         })
@@ -509,6 +513,7 @@ async def _run_iterate_task(
             "files": final_state["files"],
             "runtime": final_state["runtime"],
             "review_notes": final_state.get("review_notes", []),
+            "backend": backend_name,
         })
 
     except Exception as exc:

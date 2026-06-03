@@ -12,7 +12,7 @@ import subprocess
 import tempfile
 import time
 
-from src.dev_agent.sandbox.base import SandboxRunner, TestReport, emit_terminal
+from src.dev_agent.sandbox.base import PreviewInfo, SandboxRunner, TestReport, emit_terminal
 
 logger = logging.getLogger(__name__)
 
@@ -158,7 +158,7 @@ class PythonRunner(SandboxRunner):
         elapsed_ms = int((time.monotonic() - start) * 1000)
         return _parse_pytest_output(output, return_code, elapsed_ms)
 
-    def start_preview(self, files: dict[str, str], port: int) -> int:
+    def start_preview(self, files: dict[str, str], port: int) -> PreviewInfo:
         """Start a Python app (FastAPI/Flask) on the given port."""
         tmpdir = tempfile.mkdtemp(prefix="dev_agent_preview_py_")
         tmp = pathlib.Path(tmpdir)
@@ -176,6 +176,9 @@ class PythonRunner(SandboxRunner):
 
         # Log stderr to file for debugging preview failures
         stderr_log = tmp / "_preview_stderr.log"
+
+        # Track whether this is a simple static serve (no stdout needed)
+        is_static_fallback = False
 
         if "FastAPI" in source or "Starlette" in source:
             # Strip server-start calls so uvicorn CLI controls the port
@@ -203,21 +206,35 @@ class PythonRunner(SandboxRunner):
             # otherwise run the script directly with PORT injected
             if (tmp / "index.html").exists():
                 cmd = ["python", "-m", "http.server", str(port), "--bind", "0.0.0.0"]
+                is_static_fallback = True
             else:
                 cmd = ["python", f"{entry_stem}.py"]
 
-        proc = subprocess.Popen(
-            cmd,
-            cwd=tmpdir,
-            env=env,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
-        # Store stderr pipe for async reading by preview_server
-        proc._stderr_log_path = str(stderr_log)  # type: ignore[attr-defined]
-        # Write initial stderr to log file for backward compat
-        self._start_stderr_logger(proc, stderr_log)
-        return proc.pid
+        logger.info("PythonRunner preview: cmd=%s, is_static=%s, files=%s",
+                    cmd, is_static_fallback, list(files.keys()))
+
+        if is_static_fallback:
+            # Static http.server: stdout/stderr to DEVNULL to prevent
+            # pipe buffer fill-up that deadlocks the process
+            proc = subprocess.Popen(
+                cmd,
+                cwd=tmpdir,
+                env=env,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        else:
+            # App servers (uvicorn/Flask): drain stderr to log, discard stdout
+            proc = subprocess.Popen(
+                cmd,
+                cwd=tmpdir,
+                env=env,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+            )
+            self._start_stderr_logger(proc, stderr_log)
+
+        return PreviewInfo(pid=proc.pid, tmpdir=tmpdir)
 
     @staticmethod
     def _start_stderr_logger(proc: subprocess.Popen, log_path: pathlib.Path) -> None:

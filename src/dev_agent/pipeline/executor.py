@@ -28,6 +28,33 @@ def get_runner(runtime: str) -> SandboxRunner:
     return runner_cls()
 
 
+def get_runner_for_files(runtime: str, files: dict[str, str]) -> SandboxRunner:
+    """Get the best runner by considering both the declared runtime AND the actual files.
+
+    Prevents mis-routing when e.g. 'auto' leaks through or the planner picks
+    'python' for a pure HTML/CSS/JS project.
+    """
+    # If we have an explicit match, use it
+    if runtime in _RUNNERS:
+        return _RUNNERS[runtime]()
+
+    # Smart fallback: inspect the files to guess the best runner
+    has_py = any(f.endswith(".py") for f in files)
+    has_html = any(f.endswith(".html") for f in files)
+    has_js_entry = any(f in ("server.js", "app.js", "index.js") for f in files)
+    has_package_json = "package.json" in files
+
+    if has_py:
+        return PythonRunner()
+    if has_js_entry or has_package_json:
+        return NodeRunner()
+    if has_html:
+        return StaticRunner()
+
+    # Ultimate fallback
+    return PythonRunner()
+
+
 async def run_tests_in_sandbox(
     files: dict[str, str],
     runtime: str,

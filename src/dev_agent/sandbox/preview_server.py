@@ -1,4 +1,4 @@
-﻿"""Preview lifecycle manager — allocates ports, tracks PIDs, handles cleanup."""
+"""Preview lifecycle manager — allocates ports, tracks PIDs, handles cleanup."""
 
 from __future__ import annotations
 
@@ -39,15 +39,21 @@ def release_port(session_id: str) -> None:
     _allocated_ports.pop(session_id, None)
 
 
-async def _wait_for_port(port: int, timeout: float = 8.0) -> bool:
-    """Poll until a port is accepting TCP connections (or timeout)."""
+async def _wait_for_port(port: int, timeout: float = 20.0) -> bool:
+    """Poll until a port is accepting TCP connections (or timeout).
+
+    Uses increasing sleep intervals to avoid busy-waiting while still
+    detecting fast-binding servers quickly.
+    """
     deadline = time.monotonic() + timeout
+    sleep_interval = 0.15  # start fast
     while time.monotonic() < deadline:
         try:
             with socket.create_connection(("127.0.0.1", port), timeout=0.3):
                 return True
         except (ConnectionRefusedError, OSError):
-            await asyncio.sleep(0.25)
+            await asyncio.sleep(sleep_interval)
+            sleep_interval = min(sleep_interval * 1.5, 1.0)  # exponential up to 1s
     return False
 
 
@@ -58,18 +64,29 @@ async def start_preview(
 ) -> dict[str, object]:
     """Start a preview server for the session. Returns preview metadata."""
     port = allocate_port(session_id)
+    logger.info("Starting preview for session=%s on port=%d (%d files, runner=%s)",
+                session_id[:12], port, len(files), type(runner).__name__)
+
     loop = asyncio.get_event_loop()
-    pid = await loop.run_in_executor(None, runner.start_preview, files, port)
+    preview_info = await loop.run_in_executor(None, runner.start_preview, files, port)
+
+    # PreviewInfo carries pid + tmpdir
+    pid = preview_info.pid
+    tmpdir = preview_info.tmpdir
     _active_pids[session_id] = pid
+    _preview_dirs[session_id] = tmpdir
+
+    logger.info("Preview process started: pid=%d, tmpdir=%s", pid, tmpdir)
 
     # Wait for the server to actually bind the port before returning success
-    ready = await _wait_for_port(port, timeout=12.0)
+    ready = await _wait_for_port(port, timeout=20.0)
     if not ready:
         # Check if process is still alive
         try:
             os.kill(pid, 0)  # signal 0 = existence check
         except OSError:
             _active_pids.pop(session_id, None)
+            _preview_dirs.pop(session_id, None)
             release_port(session_id)
             # Try to read stderr log for diagnostics
             stderr_msg = _read_preview_stderr(pid)
@@ -77,7 +94,7 @@ async def start_preview(
             if stderr_msg:
                 detail += f": {stderr_msg}"
             raise RuntimeError(detail) from None
-        logger.warning("Preview on port %d not ready after 12s — proceeding", port)
+        logger.warning("Preview on port %d not ready after 20s — proceeding", port)
 
     return {
         "port": port,
@@ -96,24 +113,33 @@ async def stream_preview_stderr(
         return
     import glob
     await asyncio.sleep(2.0)  # Give process time to write something
+
+    # Check session-specific tmpdir first
+    session_tmpdir = _preview_dirs.get(session_id)
+    search_dirs: list[str] = []
+    if session_tmpdir:
+        search_dirs.append(session_tmpdir)
+    # Also check glob patterns as fallback
     for pattern in ["/tmp/dev_agent_preview_py_*", "/tmp/dev_agent_preview_node_*",
                     "/tmp/dev_agent_preview_static_*"]:
-        for d in glob.glob(pattern):
-            log_path = os.path.join(d, "_preview_stderr.log")
-            if os.path.isfile(log_path):
-                try:
-                    with open(log_path, encoding="utf-8") as f:
-                        content = f.read(4000)
-                    if content.strip():
-                        try:
-                            queue.put_nowait({
-                                "event": "terminal",
-                                "data": {"source": "preview", "text": content.strip()},
-                            })
-                        except asyncio.QueueFull:
-                            pass
-                except OSError:
-                    pass
+        search_dirs.extend(glob.glob(pattern))
+
+    for d in search_dirs:
+        log_path = os.path.join(d, "_preview_stderr.log")
+        if os.path.isfile(log_path):
+            try:
+                with open(log_path, encoding="utf-8") as f:
+                    content = f.read(4000)
+                if content.strip():
+                    try:
+                        queue.put_nowait({
+                            "event": "terminal",
+                            "data": {"source": "preview", "text": content.strip()},
+                        })
+                    except asyncio.QueueFull:
+                        pass
+            except OSError:
+                pass
 
 
 def _read_preview_stderr(pid: int) -> str:

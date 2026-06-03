@@ -330,7 +330,7 @@
 
         .agent-node.running .agent-icon {
             border-color: currentColor;
-            animation: pulse-border 1.5s infinite;
+            animation: pulse-glow 2s ease-in-out infinite;
         }
         
         .agent-node.done .agent-icon {
@@ -344,8 +344,10 @@
             color: var(--text-secondary);
             text-transform: uppercase;
             letter-spacing: 0.5px;
+            transition: color 0.3s ease;
         }
         .agent-node.running .agent-label { color: var(--text-primary); }
+        .agent-node.done .agent-label { color: var(--text-primary); }
 
         .flow-connector {
             flex: 1;
@@ -357,9 +359,21 @@
             z-index: 1;
         }
 
-        @keyframes pulse-border {
-            0%, 100% { border-width: 1px; }
-            50% { border-width: 2px; }
+        @keyframes pulse-glow {
+            0%, 100% { box-shadow: 0 0 6px 0px currentColor; }
+            50% { box-shadow: 0 0 18px 4px currentColor; }
+        }
+
+        .stream-indicator {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            animation: stream-pulse 1.2s ease-in-out infinite;
+        }
+        @keyframes stream-pulse {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.4; transform: scale(0.7); }
         }
 
         .log-container {
@@ -766,6 +780,16 @@
                 </div>
             </div>
 
+            <div class="input-group">
+                <label class="input-label">Orchestration Backend</label>
+                <div class="select-wrapper">
+                    <select class="styled-select" id="backendSelect">
+                        <option value="langgraph">LangGraph (State Machine)</option>
+                        <option value="crewai">CrewAI (Role-Based)</option>
+                    </select>
+                </div>
+            </div>
+
             <button class="btn-primary" id="generateBtn">Initialize Build</button>
 
             <div class="iterate-section" id="iterateSection">
@@ -1069,7 +1093,7 @@
             resetUI();
             const resp = await fetch('/generate', {
                 method: 'POST', headers: {'Content-Type':'application/json'},
-                body: JSON.stringify({ idea, runtime: runtimeSelect.value, max_iterations: parseInt(iterSlider.value) })
+                body: JSON.stringify({ idea, runtime: runtimeSelect.value, max_iterations: parseInt(iterSlider.value), backend: document.getElementById('backendSelect').value })
             });
             const data = await resp.json();
             sessionId = data.session_id;
