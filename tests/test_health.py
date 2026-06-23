@@ -20,13 +20,15 @@ def test_health_returns_200(client: TestClient) -> None:
 @pytest.mark.unit
 def test_health_response_schema(client: TestClient) -> None:
     data = client.get("/health").json()
-    assert data["status"] == "ok"
+    assert data["status"] in ("ok", "degraded")
     assert data["project"] == "project-7-ai-dev-agent"
     assert "provider" in data
     assert "runtimes" in data
     assert "python" in data["runtimes"]
     assert "node" in data["runtimes"]
     assert "static" in data["runtimes"]
+    assert "database" in data
+    assert "redis" in data
 
 
 @pytest.mark.unit

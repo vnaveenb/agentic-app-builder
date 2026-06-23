@@ -31,4 +31,5 @@ EXPOSE 8007
 HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
     CMD curl -f http://localhost:8007/health || exit 1
 
-CMD ["uvicorn", "src.dev_agent.main:app", "--host", "0.0.0.0", "--port", "8007"]
+# Init DB tables on startup, then run the app
+CMD ["sh", "-c", "python -c 'import asyncio; from src.dev_agent.db.database import init_db; asyncio.run(init_db())' && uvicorn src.dev_agent.main:app --host 0.0.0.0 --port 8007"]

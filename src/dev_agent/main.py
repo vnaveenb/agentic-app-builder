@@ -18,6 +18,15 @@ import httpx
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, Response, StreamingResponse
 
+from src.dev_agent.cache import (
+    cache_session_state,
+    close_redis,
+    get_redis,
+    health_check as redis_health_check,
+)
+from src.dev_agent.db.database import async_session_factory, close_db, init_db
+from src.dev_agent.db.models import Session as DBSession
+from sqlalchemy import text as select_text
 from src.dev_agent.pipeline.base import PipelineBackend
 from src.dev_agent.pipeline.crew_backend import CrewAIBackend
 from src.dev_agent.pipeline.executor import get_runner, get_runner_for_files
@@ -25,13 +34,34 @@ from src.dev_agent.pipeline.graph import LangGraphBackend
 from src.dev_agent.pipeline.state import DevPipelineState
 from src.dev_agent.sandbox import preview_server
 from src.dev_agent.schemas import (
+    ChatHistoryResponse,
+    ChatMessageRequest,
+    ChatMessageSchema,
+    ChatResponse,
+    DiffResponse,
+    FileDiffSchema,
     GenerateRequest,
     GenerateResponse,
     HealthResponse,
     IterateRequest,
+    MemoryCreateRequest,
+    MemoryListResponse,
+    MemorySchema,
     PreviewStartResponse,
+    SessionListResponse,
+    SessionSummary,
     StatusResponse,
     UpdateFilesRequest,
+    VersionResponse,
+    VersionSchema,
+)
+from src.dev_agent.versioning.differ import compute_diff
+from src.dev_agent.versioning.store import (
+    checkout_version as db_checkout_version,
+    create_version,
+    get_next_version_number,
+    get_version,
+    get_versions,
 )
 
 logger = logging.getLogger(__name__)
@@ -109,9 +139,13 @@ def _inject_console_capture(content: bytes) -> bytes:
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logger.info("Project 7 — AI Dev Agent starting up")
+    await init_db()
+    logger.info("Database initialized")
     yield
     # Cleanup all preview servers on shutdown
     preview_server.cleanup_all()
+    await close_db()
+    await close_redis()
     logger.info("Project 7 — AI Dev Agent shut down, previews cleaned")
 
 
@@ -122,13 +156,22 @@ app = FastAPI(title="project-7-ai-dev-agent", lifespan=lifespan)
 
 
 @app.get("/health", response_model=HealthResponse)
-def health() -> HealthResponse:
+async def health() -> HealthResponse:
     provider = os.environ.get("LLM_PROVIDER", "google_genai:gemini-2.0-flash")
+    redis_ok = await redis_health_check()
+    db_ok = True
+    try:
+        async with async_session_factory() as session:
+            await session.execute(select_text("SELECT 1"))
+    except Exception:
+        db_ok = False
     return HealthResponse(
-        status="ok",
+        status="ok" if (redis_ok and db_ok) else "degraded",
         project="project-7-ai-dev-agent",
         provider=provider,
         runtimes=_SUPPORTED_RUNTIMES,
+        database="connected" if db_ok else "disconnected",
+        redis="connected" if redis_ok else "disconnected",
     )
 
 
@@ -162,6 +205,22 @@ async def generate(req: GenerateRequest) -> GenerateResponse:
     }
     _session_states[session_id] = initial_state
     _session_backends[session_id] = req.backend
+
+    # Create session record in DB immediately (so chat/messages can reference it)
+    try:
+        async with async_session_factory() as db:
+            db_session = DBSession(
+                id=uuid.UUID(session_id),
+                idea=req.idea,
+                runtime=req.runtime,
+                backend=req.backend,
+                status="running",
+                max_iterations=req.max_iterations,
+            )
+            db.add(db_session)
+            await db.commit()
+    except Exception as db_exc:
+        logger.warning("Failed to create session in DB: %s", db_exc)
 
     asyncio.create_task(_run_pipeline_task(session_id, initial_state, queue, req.backend))
 
@@ -296,18 +355,74 @@ async def iterate(session_id: str, req: IterateRequest) -> GenerateResponse:
 
 
 @app.get("/history/{session_id}")
-def get_history(session_id: str) -> dict[str, Any]:
+async def get_history(session_id: str) -> dict[str, Any]:
+    """Get version history — from DB if available, fallback to in-memory."""
+    async with async_session_factory() as db:
+        db_versions = await get_versions(db, session_id)
+
+    if db_versions:
+        versions = [
+            {
+                "version": v.version_number,
+                "timestamp": v.created_at.isoformat() if v.created_at else "",
+                "description": v.description,
+                "trigger": v.trigger,
+                "is_current": v.is_current,
+            }
+            for v in db_versions
+        ]
+        return {"versions": versions}
+
+    # Fallback to in-memory for backward compatibility
     history = _session_histories.get(session_id, [])
-    # Return minimal metadata to populate a UI list
     versions = [
-        {"version": h["version"], "timestamp": h.get("timestamp", ""), "description": h.get("description", f"Version {h['version']}"), "is_current": h.get("is_current", False)}
+        {"version": h["version"], "timestamp": h.get("timestamp", ""), "description": h.get("description", f"Version {h['version']}"), "is_current": h.get("is_current", False), "trigger": "initial"}
         for h in history
     ]
     return {"versions": versions}
 
 
 @app.post("/checkout/{session_id}/{version}")
-async def checkout_version(session_id: str, version: int) -> dict[str, Any]:
+async def checkout_version_endpoint(session_id: str, version: int) -> dict[str, Any]:
+    """Restore a version — creates a new rollback version (non-destructive)."""
+    async with async_session_factory() as db:
+        db_versions = await get_versions(db, session_id)
+
+        if db_versions:
+            # DB-backed: non-destructive rollback (creates new version)
+            rollback = await db_checkout_version(db, session_id, version)
+            if not rollback:
+                raise HTTPException(404, "Version not found")
+
+            # Update in-memory state with restored files
+            state = _session_states.get(session_id)
+            if state:
+                state["files"] = rollback.files_snapshot
+
+                # Restart preview if active
+                if session_id in preview_server._allocated_ports:
+                    runner = get_runner(state["runtime"])
+                    preview_server.stop_preview(session_id, runner)
+                    try:
+                        await preview_server.start_preview(session_id, state["files"], runner)
+                    except RuntimeError:
+                        pass
+
+                    queue = _event_queues.get(session_id)
+                    if queue:
+                        try:
+                            queue.put_nowait({"event": "preview_reload"})
+                        except asyncio.QueueFull:
+                            pass
+
+            return {
+                "status": "checked_out",
+                "version": rollback.version_number,
+                "restored_from": version,
+                "files": rollback.files_snapshot,
+            }
+
+    # Fallback to in-memory
     state = _session_states.get(session_id)
     history = _session_histories.get(session_id, [])
     if not state or not history:
@@ -338,6 +453,266 @@ async def checkout_version(session_id: str, version: int) -> dict[str, Any]:
                 pass
 
     return {"status": "checked_out", "version": version, "files": state["files"]}
+
+
+# ── Diff endpoint ─────────────────────────────────────────────────────────────
+
+
+@app.get("/diff/{session_id}/{v1}/{v2}", response_model=DiffResponse)
+async def diff_versions(session_id: str, v1: int, v2: int) -> DiffResponse:
+    """Compute on-demand diff between two versions."""
+    if v1 == v2:
+        raise HTTPException(400, "Cannot diff a version against itself")
+
+    async with async_session_factory() as db:
+        version_1 = await get_version(db, session_id, v1)
+        version_2 = await get_version(db, session_id, v2)
+
+    # Fallback to in-memory if DB doesn't have them
+    if not version_1 or not version_2:
+        history = _session_histories.get(session_id, [])
+        target_1 = next((h for h in history if h["version"] == v1), None)
+        target_2 = next((h for h in history if h["version"] == v2), None)
+        if not target_1 or not target_2:
+            raise HTTPException(404, "One or both versions not found")
+        files_v1 = target_1["files"]
+        files_v2 = target_2["files"]
+    else:
+        files_v1 = version_1.files_snapshot
+        files_v2 = version_2.files_snapshot
+
+    result = compute_diff(files_v1, files_v2, v1, v2)
+
+    return DiffResponse(
+        v1=result.v1,
+        v2=result.v2,
+        changes=[
+            FileDiffSchema(
+                file=c.file,
+                status=c.status.value,
+                diff=c.diff,
+                additions=c.additions,
+                deletions=c.deletions,
+            )
+            for c in result.changes
+        ],
+        summary=result.summary,
+    )
+
+
+# ── Sessions list endpoint ────────────────────────────────────────────────────
+
+
+@app.get("/sessions", response_model=SessionListResponse)
+async def list_sessions() -> SessionListResponse:
+    """List all sessions — from DB, plus any in-memory-only sessions."""
+    from sqlalchemy import select
+
+    sessions: list[SessionSummary] = []
+
+    # DB sessions
+    async with async_session_factory() as db:
+        result = await db.execute(
+            select(DBSession).order_by(DBSession.created_at.desc()).limit(50)
+        )
+        for s in result.scalars().all():
+            sessions.append(SessionSummary(
+                session_id=str(s.id),
+                idea=s.idea[:100],
+                runtime=s.runtime,
+                backend=s.backend,
+                status=s.status,
+                created_at=s.created_at.isoformat() if s.created_at else "",
+            ))
+
+    # In-memory sessions not yet in DB
+    db_ids = {s.session_id for s in sessions}
+    for sid, state in _session_states.items():
+        if sid not in db_ids:
+            sessions.append(SessionSummary(
+                session_id=sid,
+                idea=state["idea"][:100],
+                runtime=state["runtime"],
+                backend=_session_backends.get(sid, "langgraph"),
+                status=state["status"],
+                created_at="",
+            ))
+
+    return SessionListResponse(sessions=sessions)
+
+
+# ── Chat endpoints ────────────────────────────────────────────────────────────
+
+
+@app.post("/chat/{session_id}", response_model=ChatResponse)
+async def send_chat_message(session_id: str, req: ChatMessageRequest) -> ChatResponse:
+    """Send a chat message and get an AI response. May trigger iteration."""
+    from src.dev_agent.chat import generate_chat_response, store_message
+
+    state = _session_states.get(session_id)
+    if not state:
+        raise HTTPException(404, "Session not found")
+
+    async with async_session_factory() as db:
+        # Store user message
+        await store_message(db, session_id, "user", req.message)
+
+        # Build context for the chat
+        session_context = {
+            "idea": state.get("idea", ""),
+            "runtime": state.get("runtime", "auto"),
+            "status": state.get("status", "unknown"),
+            "files": state.get("files", {}),
+        }
+
+        # Generate AI response
+        response_text, should_iterate = await generate_chat_response(
+            db, session_id, req.message, session_context
+        )
+
+        # Store assistant response
+        assistant_msg = await store_message(
+            db, session_id, "assistant", response_text,
+            metadata={"should_iterate": should_iterate},
+        )
+
+    # Emit chat event via SSE if queue exists
+    queue = _event_queues.get(session_id)
+    if queue:
+        try:
+            queue.put_nowait({
+                "event": "chat_response",
+                "message": response_text,
+                "should_iterate": should_iterate,
+            })
+        except asyncio.QueueFull:
+            pass
+
+    # If iteration triggered and pipeline is ready, start it
+    iteration_feedback = ""
+    if should_iterate and state.get("status") == "done" and state.get("plan"):
+        iteration_feedback = req.message
+        # Kick off iterate pipeline
+        runner = get_runner(state["runtime"])
+        preview_server.stop_preview(session_id, runner)
+
+        iter_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+        _event_queues[session_id] = iter_queue
+        state["status"] = "running"
+        state["user_feedback"] = req.message
+        state["iteration"] = 0
+        state["test_report"] = None
+        state["errors"] = []
+        state["event_queue"] = iter_queue
+
+        asyncio.create_task(
+            _run_iterate_task(session_id, state, iter_queue, _session_backends.get(session_id, "langgraph"))
+        )
+
+    return ChatResponse(
+        message=ChatMessageSchema(
+            id=str(assistant_msg.id),
+            role="assistant",
+            content=response_text,
+            created_at=assistant_msg.created_at.isoformat() if assistant_msg.created_at else "",
+        ),
+        should_iterate=should_iterate,
+        iteration_feedback=iteration_feedback,
+    )
+
+
+@app.get("/chat/{session_id}", response_model=ChatHistoryResponse)
+async def get_chat_history_endpoint(session_id: str) -> ChatHistoryResponse:
+    """Retrieve full chat history for a session."""
+    from src.dev_agent.chat import get_chat_history
+
+    async with async_session_factory() as db:
+        messages = await get_chat_history(db, session_id)
+
+    return ChatHistoryResponse(
+        session_id=session_id,
+        messages=[
+            ChatMessageSchema(
+                id=str(m.id),
+                role=m.role,
+                content=m.content,
+                created_at=m.created_at.isoformat() if m.created_at else "",
+                metadata=m.metadata_ or {},
+            )
+            for m in messages
+        ],
+    )
+
+
+# ── Memory endpoints ──────────────────────────────────────────────────────────
+
+
+@app.get("/memory", response_model=MemoryListResponse)
+async def list_memories() -> MemoryListResponse:
+    """List all stored cross-session memories."""
+    from src.dev_agent.memory.memory_store import get_all_memories
+
+    async with async_session_factory() as db:
+        memories = await get_all_memories(db)
+
+    return MemoryListResponse(
+        memories=[
+            MemorySchema(
+                id=str(m.id),
+                category=m.category,
+                key=m.key,
+                value=m.value,
+                relevance_score=m.relevance_score,
+                access_count=m.access_count,
+                created_at=m.created_at.isoformat() if m.created_at else "",
+            )
+            for m in memories
+        ],
+        total=len(memories),
+    )
+
+
+@app.post("/memory", response_model=MemorySchema)
+async def create_memory(req: MemoryCreateRequest) -> MemorySchema:
+    """Manually add a memory entry."""
+    from src.dev_agent.memory.memory_store import store_memory
+
+    async with async_session_factory() as db:
+        mem = await store_memory(db, req.category, req.key, req.value)
+
+    return MemorySchema(
+        id=str(mem.id),
+        category=mem.category,
+        key=mem.key,
+        value=mem.value,
+        relevance_score=mem.relevance_score,
+        access_count=mem.access_count,
+        created_at=mem.created_at.isoformat() if mem.created_at else "",
+    )
+
+
+@app.delete("/memory/{memory_id}")
+async def delete_memory_endpoint(memory_id: str) -> dict[str, str]:
+    """Delete a specific memory."""
+    from src.dev_agent.memory.memory_store import delete_memory
+
+    async with async_session_factory() as db:
+        deleted = await delete_memory(db, memory_id)
+
+    if not deleted:
+        raise HTTPException(404, "Memory not found")
+    return {"status": "deleted"}
+
+
+@app.post("/memory/clear")
+async def clear_memories() -> dict[str, Any]:
+    """Clear all stored memories."""
+    from src.dev_agent.memory.memory_store import clear_all_memories
+
+    async with async_session_factory() as db:
+        count = await clear_all_memories(db)
+
+    return {"status": "cleared", "deleted_count": count}
 
 
 # ── Preview endpoints ─────────────────────────────────────────────────────────
@@ -450,7 +825,7 @@ async def _run_pipeline_task(
         _session_states[session_id] = final_state
         _session_states[session_id]["status"] = "done"
 
-        # Record initial version in history
+        # Record initial version in history (in-memory)
         if session_id not in _session_histories:
             _session_histories[session_id] = []
         _session_histories[session_id].append({
@@ -459,6 +834,61 @@ async def _run_pipeline_task(
             "files": dict(final_state.get("files", {})),
             "is_current": True
         })
+
+        # Persist version to PostgreSQL
+        try:
+            async with async_session_factory() as db:
+                # Update session record (created at /generate time)
+                from sqlalchemy import update
+                await db.execute(
+                    update(DBSession)
+                    .where(DBSession.id == uuid.UUID(session_id))
+                    .values(
+                        status="done",
+                        plan=final_state["plan"].model_dump() if final_state.get("plan") else None,
+                        errors=final_state.get("errors", []),
+                        runtime=final_state["runtime"],
+                    )
+                )
+                await db.commit()
+
+                # Create v1
+                await create_version(
+                    db=db,
+                    session_id=session_id,
+                    version_number=1,
+                    description=f"Initial Build ({backend_name})",
+                    trigger="initial",
+                    files_snapshot=dict(final_state.get("files", {})),
+                    metadata={
+                        "review_notes": final_state.get("review_notes", []),
+                        "test_report": final_state["test_report"].model_dump() if final_state.get("test_report") else None,
+                    },
+                )
+        except Exception as db_exc:
+            logger.warning("Failed to persist to DB (in-memory still works): %s", db_exc)
+
+        # Cache state in Redis
+        try:
+            await cache_session_state(session_id, final_state)
+        except Exception:
+            pass  # Redis is optional
+
+        # Extract and store memories from this session (async, non-blocking)
+        try:
+            from src.dev_agent.memory.memory_manager import extract_and_store_memories
+
+            async with async_session_factory() as db:
+                await extract_and_store_memories(
+                    db=db,
+                    idea=initial_state["idea"],
+                    runtime=final_state["runtime"],
+                    files=final_state.get("files", {}),
+                    review_notes=final_state.get("review_notes", []),
+                    test_report=final_state["test_report"].model_dump() if final_state.get("test_report") else None,
+                )
+        except Exception as mem_exc:
+            logger.warning("Memory extraction failed (non-critical): %s", mem_exc)
 
         # Push completion event with files embedded
         await queue.put({
@@ -494,7 +924,7 @@ async def _run_iterate_task(
         _session_states[session_id]["status"] = "done"
         _session_states[session_id]["user_feedback"] = ""  # Clear after use
 
-        # Record iteration in history
+        # Record iteration in history (in-memory)
         history = _session_histories.get(session_id, [])
         v_num = len(history) + 1
         for h in history:
@@ -507,6 +937,32 @@ async def _run_iterate_task(
             "is_current": True
         })
         _session_histories[session_id] = history
+
+        # Persist version to PostgreSQL
+        try:
+            async with async_session_factory() as db:
+                next_num = await get_next_version_number(db, session_id)
+                await create_version(
+                    db=db,
+                    session_id=session_id,
+                    version_number=next_num,
+                    description=f"Iteration {next_num - 1} ({backend_name})",
+                    trigger="iteration",
+                    files_snapshot=dict(final_state.get("files", {})),
+                    metadata={
+                        "review_notes": final_state.get("review_notes", []),
+                        "test_report": final_state["test_report"].model_dump() if final_state.get("test_report") else None,
+                        "user_feedback": state.get("user_feedback", ""),
+                    },
+                )
+        except Exception as db_exc:
+            logger.warning("Failed to persist iteration to DB: %s", db_exc)
+
+        # Cache updated state
+        try:
+            await cache_session_state(session_id, final_state)
+        except Exception:
+            pass
 
         await queue.put({
             "event": "pipeline_done",

@@ -47,7 +47,21 @@ async def planner_node(state: DevPipelineState) -> dict[str, Any]:
     llm = get_llm(temperature=0.2)
     structured_llm = llm.with_structured_output(Plan)
 
-    prompt = _PLANNER_PROMPT.format(idea=state["idea"])
+    # Inject memory context if available
+    memory_context = ""
+    try:
+        from src.dev_agent.db.database import async_session_factory
+        from src.dev_agent.memory.memory_store import format_memories_for_prompt, get_relevant_memories
+
+        async with async_session_factory() as db:
+            memories = await get_relevant_memories(db, limit=5)
+            memory_text = format_memories_for_prompt(memories)
+            if memory_text:
+                memory_context = f"\n\nContext from previous sessions (user preferences):\n{memory_text}"
+    except Exception:
+        pass  # Memory is optional — don't break the pipeline
+
+    prompt = _PLANNER_PROMPT.format(idea=state["idea"]) + memory_context
     plan: Plan = await structured_llm.ainvoke(prompt)  # type: ignore[assignment]
 
     logger.info("Plan created: app=%s, runtime=%s, files=%d",
