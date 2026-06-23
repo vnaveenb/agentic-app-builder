@@ -741,6 +741,322 @@
             box-shadow: 0 0 15px rgba(16, 185, 129, 0.4);
         }
 
+        /* ── Left Panel Tabs ── */
+        .left-tabs {
+            display: flex;
+            gap: 2px;
+            background: rgba(0,0,0,0.3);
+            border-radius: var(--radius-md);
+            padding: 3px;
+            margin-bottom: 16px;
+        }
+        .left-tab-btn {
+            flex: 1;
+            padding: 8px 12px;
+            border: none;
+            border-radius: 6px;
+            background: transparent;
+            color: var(--text-secondary);
+            font-family: var(--font-ui);
+            font-size: 0.8rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .left-tab-btn.active {
+            background: rgba(255,255,255,0.1);
+            color: var(--text-primary);
+        }
+        .left-tab-btn:hover:not(.active) { color: var(--text-primary); }
+        .left-tab-content { display: none; flex-direction: column; gap: 16px; }
+        .left-tab-content.active { display: flex; }
+
+        /* ── Advanced Toggle ── */
+        .advanced-toggle {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 0;
+            color: var(--text-muted);
+            font-size: 0.8rem;
+            cursor: pointer;
+            user-select: none;
+            transition: color 0.2s;
+        }
+        .advanced-toggle:hover { color: var(--text-secondary); }
+        .advanced-toggle .chevron {
+            transition: transform 0.2s;
+            font-size: 0.65rem;
+        }
+        .advanced-toggle.open .chevron { transform: rotate(90deg); }
+        .advanced-content {
+            display: none;
+            flex-direction: column;
+            gap: 12px;
+            padding-left: 4px;
+            border-left: 2px solid var(--border-subtle);
+            margin-left: 4px;
+        }
+        .advanced-content.open { display: flex; }
+
+        /* ── Chat UI ── */
+        .chat-messages {
+            flex: 1;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            padding: 4px 0;
+            min-height: 100px;
+            max-height: 300px;
+        }
+        .chat-messages::-webkit-scrollbar { width: 3px; }
+        .chat-messages::-webkit-scrollbar-thumb { background: var(--border-subtle); border-radius: 3px; }
+        .chat-bubble {
+            max-width: 85%;
+            padding: 10px 14px;
+            border-radius: 12px;
+            font-size: 0.85rem;
+            line-height: 1.5;
+            animation: fade-in 0.2s ease-out;
+        }
+        .chat-bubble.user {
+            align-self: flex-end;
+            background: var(--accent-cyan);
+            color: #fff;
+            border-bottom-right-radius: 4px;
+        }
+        .chat-bubble.assistant {
+            align-self: flex-start;
+            background: rgba(255,255,255,0.08);
+            color: var(--text-primary);
+            border-bottom-left-radius: 4px;
+        }
+        .chat-input-row {
+            display: flex;
+            gap: 8px;
+            margin-top: 8px;
+        }
+        .chat-input {
+            flex: 1;
+            padding: 10px 14px;
+            background: rgba(0,0,0,0.3);
+            border: 1px solid var(--border-subtle);
+            border-radius: 20px;
+            color: var(--text-primary);
+            font-family: var(--font-ui);
+            font-size: 0.85rem;
+            outline: none;
+            transition: border-color 0.2s;
+        }
+        .chat-input:focus { border-color: var(--accent-cyan); }
+        .chat-send-btn {
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            border: none;
+            background: var(--accent-cyan);
+            color: #fff;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: background 0.2s;
+        }
+        .chat-send-btn:hover { background: #2563eb; }
+        .chat-send-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+        /* ── Memory Section ── */
+        .memory-section {
+            border-top: 1px solid var(--border-subtle);
+            padding-top: 12px;
+            margin-top: auto;
+        }
+        .memory-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 8px;
+        }
+        .memory-cards {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            max-height: 120px;
+            overflow-y: auto;
+        }
+        .memory-cards::-webkit-scrollbar { width: 3px; }
+        .memory-cards::-webkit-scrollbar-thumb { background: var(--border-subtle); }
+        .memory-card {
+            padding: 8px 10px;
+            background: rgba(99, 102, 241, 0.08);
+            border: 1px solid rgba(99, 102, 241, 0.2);
+            border-radius: 6px;
+            font-size: 0.78rem;
+            color: var(--text-secondary);
+            line-height: 1.4;
+        }
+        .memory-card .memory-key {
+            color: var(--accent-violet);
+            font-weight: 500;
+            margin-right: 6px;
+        }
+
+        /* ── Version Timeline ── */
+        .version-timeline {
+            border-top: 1px solid var(--border-subtle);
+            padding-top: 12px;
+        }
+        .timeline-track {
+            display: flex;
+            align-items: center;
+            gap: 0;
+            padding: 8px 0;
+            overflow-x: auto;
+        }
+        .timeline-track::-webkit-scrollbar { height: 0; }
+        .timeline-dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: var(--border-subtle);
+            border: 2px solid var(--border-subtle);
+            cursor: pointer;
+            transition: all 0.2s;
+            flex-shrink: 0;
+            position: relative;
+        }
+        .timeline-dot:hover { border-color: var(--accent-cyan); transform: scale(1.3); }
+        .timeline-dot.active {
+            background: var(--accent-cyan);
+            border-color: var(--accent-cyan);
+            box-shadow: 0 0 8px rgba(59, 130, 246, 0.4);
+        }
+        .timeline-dot[title]:hover::after {
+            content: attr(title);
+            position: absolute;
+            bottom: 18px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: var(--bg-panel);
+            border: 1px solid var(--border-subtle);
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 0.7rem;
+            white-space: nowrap;
+            color: var(--text-primary);
+            z-index: 10;
+        }
+        .timeline-line {
+            flex: 1;
+            height: 2px;
+            min-width: 12px;
+            background: var(--border-subtle);
+        }
+        .timeline-line.filled { background: var(--accent-cyan); }
+
+        /* ── Enlarged Pipeline Nodes ── */
+        .pipeline-flow {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+        }
+        .agent-node .agent-icon {
+            width: 52px;
+            height: 52px;
+            border-radius: 14px;
+        }
+        .agent-node .agent-icon svg { width: 24px; height: 24px; }
+
+        /* ── Task Checklist (below each node) ── */
+        .agent-tasks {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            margin-top: 8px;
+            min-width: 120px;
+        }
+        .task-item {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 0.72rem;
+            color: var(--text-muted);
+            transition: color 0.3s;
+            white-space: nowrap;
+        }
+        .task-item.done { color: var(--text-secondary); }
+        .task-item .task-check {
+            width: 14px;
+            height: 14px;
+            border-radius: 4px;
+            border: 1.5px solid var(--border-subtle);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+            transition: all 0.3s;
+        }
+        .task-item.done .task-check {
+            background: var(--accent-emerald);
+            border-color: var(--accent-emerald);
+        }
+        .task-item.done .task-check::after {
+            content: '✓';
+            color: #000;
+            font-size: 0.6rem;
+            font-weight: bold;
+        }
+        .task-item.active { color: var(--text-primary); }
+        .task-item.active .task-check {
+            border-color: currentColor;
+            animation: pulse-glow 2s ease-in-out infinite;
+        }
+
+        /* ── Bottom Bar Agent Status ── */
+        .agent-status-row {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            flex: 1;
+        }
+        .agent-status-item {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 0.8rem;
+            font-weight: 500;
+            color: var(--text-muted);
+            cursor: pointer;
+            transition: color 0.2s;
+        }
+        .agent-status-item:hover { color: var(--text-secondary); }
+        .agent-status-item .status-icon {
+            width: 18px;
+            height: 18px;
+            border-radius: 50%;
+            border: 2px solid var(--border-subtle);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.6rem;
+            transition: all 0.3s;
+        }
+        .agent-status-item.running .status-icon {
+            border-color: currentColor;
+            animation: pulse-glow 1.5s ease-in-out infinite;
+        }
+        .agent-status-item.done .status-icon {
+            background: var(--accent-emerald);
+            border-color: var(--accent-emerald);
+            color: #000;
+        }
+        .agent-status-item.done .status-icon::after { content: '✓'; font-weight: bold; }
+        .agent-status-item[data-agent="planner"] { color: var(--agent-planner); }
+        .agent-status-item[data-agent="developer"] { color: var(--agent-developer); }
+        .agent-status-item[data-agent="tester"] { color: var(--agent-tester); }
+        .agent-status-item[data-agent="reviewer"] { color: var(--agent-reviewer); }
+
     </style>
 </head>
 <body>
@@ -753,54 +1069,89 @@
                 Dev Agent
             </div>
 
-            <div class="input-group">
-                <label class="input-label">Project Vision</label>
-                <textarea class="idea-input" id="ideaInput" placeholder="Describe your application idea...&#10;&#10;e.g., A minimalist pomodoro timer with a neon dark theme using React."></textarea>
+            <!-- Tab Switcher -->
+            <div class="left-tabs">
+                <button class="left-tab-btn active" data-left-target="buildTab">New Build</button>
+                <button class="left-tab-btn" data-left-target="chatTab">Chat</button>
             </div>
 
-            <div class="input-group">
-                <label class="input-label">Runtime Environment</label>
-                <div class="select-wrapper">
-                    <select class="styled-select" id="runtimeSelect">
-                        <option value="auto">Auto-detect from prompt</option>
-                        <option value="python">Python (FastAPI/Flask)</option>
-                        <option value="node">Node.js (Express)</option>
-                        <option value="react">React (CDN)</option>
-                        <option value="angular">Angular (CDN)</option>
-                        <option value="static">Static HTML/JS</option>
-                    </select>
+            <!-- NEW BUILD TAB -->
+            <div class="left-tab-content active" id="buildTab">
+                <div class="input-group">
+                    <label class="input-label">Project Vision</label>
+                    <textarea class="idea-input" id="ideaInput" placeholder="Describe your application idea...&#10;&#10;e.g., A minimalist pomodoro timer with a neon dark theme using React."></textarea>
+                </div>
+
+                <button class="btn-primary" id="generateBtn">Initialize Build</button>
+
+                <!-- Advanced Settings (collapsed) -->
+                <div class="advanced-toggle" id="advancedToggle">
+                    <span class="chevron">▶</span> Advanced Settings
+                </div>
+                <div class="advanced-content" id="advancedContent">
+                    <div class="input-group">
+                        <label class="input-label">Runtime Environment</label>
+                        <div class="select-wrapper">
+                            <select class="styled-select" id="runtimeSelect">
+                                <option value="auto">Auto-detect from prompt</option>
+                                <option value="python">Python (FastAPI/Flask)</option>
+                                <option value="node">Node.js (Express)</option>
+                                <option value="react">React (CDN)</option>
+                                <option value="angular">Angular (CDN)</option>
+                                <option value="static">Static HTML/JS</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="input-group">
+                        <label class="input-label">Auto-Iterations</label>
+                        <div class="slider-wrapper">
+                            <input type="range" id="iterSlider" min="1" max="5" value="2">
+                            <span class="slider-value" id="iterValue">2</span>
+                        </div>
+                    </div>
+                    <div class="input-group">
+                        <label class="input-label">Orchestration Backend</label>
+                        <div class="select-wrapper">
+                            <select class="styled-select" id="backendSelect">
+                                <option value="langgraph">LangGraph (State Machine)</option>
+                                <option value="crewai">CrewAI (Role-Based)</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="iterate-section" id="iterateSection">
+                    <label class="input-label">Feedback Loop</label>
+                    <textarea class="idea-input" id="iterateInput" style="min-height: 80px;" placeholder="What should be changed?"></textarea>
+                    <button class="btn-secondary" id="iterateBtn">Apply Iteration</button>
                 </div>
             </div>
 
-            <div class="input-group">
-                <label class="input-label">Auto-Iterations</label>
-                <div class="slider-wrapper">
-                    <input type="range" id="iterSlider" min="1" max="5" value="2">
-                    <span class="slider-value" id="iterValue">2</span>
+            <!-- CHAT TAB -->
+            <div class="left-tab-content" id="chatTab">
+                <div class="chat-messages" id="chatMessages">
+                    <div class="chat-bubble assistant">Hi! I'm your dev assistant. Ask me anything about your project or request changes.</div>
+                </div>
+                <div class="chat-input-row">
+                    <input class="chat-input" id="chatInput" placeholder="Ask or request changes..." autocomplete="off">
+                    <button class="chat-send-btn" id="chatSendBtn" title="Send">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
+                    </button>
                 </div>
             </div>
 
-            <div class="input-group">
-                <label class="input-label">Orchestration Backend</label>
-                <div class="select-wrapper">
-                    <select class="styled-select" id="backendSelect">
-                        <option value="langgraph">LangGraph (State Machine)</option>
-                        <option value="crewai">CrewAI (Role-Based)</option>
-                    </select>
+            <!-- Memory Section -->
+            <div class="memory-section" id="memorySection" style="display:none;">
+                <div class="memory-header">
+                    <span class="input-label">🧠 Memory</span>
                 </div>
+                <div class="memory-cards" id="memoryCards"></div>
             </div>
 
-            <button class="btn-primary" id="generateBtn">Initialize Build</button>
-
-            <div class="iterate-section" id="iterateSection">
-                <label class="input-label">Feedback Loop</label>
-                <textarea class="idea-input" id="iterateInput" style="min-height: 80px;" placeholder="What should be changed?"></textarea>
-                <button class="btn-secondary" id="iterateBtn">Apply Iteration</button>
-            </div>
-            
-            <div class="history-section" id="historySection">
-                <label class="input-label">Version History</label>
-                <div class="history-list" id="historyList"></div>
+            <!-- Version Timeline -->
+            <div class="version-timeline" id="versionTimeline" style="display:none;">
+                <span class="input-label">Version History</span>
+                <div class="timeline-track" id="timelineTrack"></div>
             </div>
 
             <div class="meta-info">
@@ -822,23 +1173,27 @@
                 <div class="input-label">Pipeline Status</div>
                 <div class="pipeline-flow">
                     <div class="agent-node" data-agent="planner" id="node-planner">
-                        <div class="agent-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 11 12 14 22 4"></polyline><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path></svg></div>
+                        <div class="agent-icon"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 11 12 14 22 4"></polyline><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path></svg></div>
                         <div class="agent-label">Plan</div>
+                        <div class="agent-tasks" id="tasks-planner"></div>
                     </div>
                     <div class="flow-connector"></div>
                     <div class="agent-node" data-agent="developer" id="node-developer">
-                        <div class="agent-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 18 22 12 16 6"></polyline><polyline points="8 6 2 12 8 18"></polyline></svg></div>
+                        <div class="agent-icon"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 18 22 12 16 6"></polyline><polyline points="8 6 2 12 8 18"></polyline></svg></div>
                         <div class="agent-label">Build</div>
+                        <div class="agent-tasks" id="tasks-developer"></div>
                     </div>
                     <div class="flow-connector"></div>
                     <div class="agent-node" data-agent="tester" id="node-tester">
-                        <div class="agent-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg></div>
+                        <div class="agent-icon"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg></div>
                         <div class="agent-label">Test</div>
+                        <div class="agent-tasks" id="tasks-tester"></div>
                     </div>
                     <div class="flow-connector"></div>
                     <div class="agent-node" data-agent="reviewer" id="node-reviewer">
-                        <div class="agent-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg></div>
+                        <div class="agent-icon"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg></div>
                         <div class="agent-label">Review</div>
+                        <div class="agent-tasks" id="tasks-reviewer"></div>
                     </div>
                 </div>
             </div>
@@ -898,7 +1253,20 @@
 
         <!-- BOTTOM BAR -->
         <div class="bottom-bar">
-            <div class="progress-track"><div class="progress-fill" id="progressFill"></div></div>
+            <div class="agent-status-row" id="agentStatusRow">
+                <div class="agent-status-item" data-agent="planner" id="status-planner">
+                    <span class="status-icon"></span> Plan
+                </div>
+                <div class="agent-status-item" data-agent="developer" id="status-developer">
+                    <span class="status-icon"></span> Build
+                </div>
+                <div class="agent-status-item" data-agent="tester" id="status-tester">
+                    <span class="status-icon"></span> Test
+                </div>
+                <div class="agent-status-item" data-agent="reviewer" id="status-reviewer">
+                    <span class="status-icon"></span> Review
+                </div>
+            </div>
             <button class="btn-download" id="downloadBtn">Export .ZIP</button>
         </div>
     </div>
@@ -929,7 +1297,6 @@
         const iterateInput = document.getElementById('iterateInput');
         const iterateBtn = document.getElementById('iterateBtn');
         const eventLog = document.getElementById('eventLog');
-        const progressFill = document.getElementById('progressFill');
         const downloadBtn = document.getElementById('downloadBtn');
         const monacoContainer = document.getElementById('monacoContainer');
         const codePlaceholder = document.getElementById('codePlaceholder');
@@ -938,14 +1305,126 @@
         const previewOverlay = document.getElementById('previewOverlay');
         const previewFrame = document.getElementById('previewFrame');
         const terminalOutput = document.getElementById('terminalOutput');
-        
-        const historySection = document.getElementById('historySection');
-        const historyList = document.getElementById('historyList');
+        const chatMessages = document.getElementById('chatMessages');
+        const chatInput = document.getElementById('chatInput');
+        const chatSendBtn = document.getElementById('chatSendBtn');
+        const memorySection = document.getElementById('memorySection');
+        const memoryCards = document.getElementById('memoryCards');
+        const versionTimeline = document.getElementById('versionTimeline');
+        const timelineTrack = document.getElementById('timelineTrack');
         
         let currentStreamAgent = null;
         let currentDetails = null;
         let currentDetailsContent = null;
         let activeAgentFilter = null;
+
+        // ─── Left Panel Tabs ───
+        document.querySelectorAll('.left-tab-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                document.querySelectorAll('.left-tab-btn').forEach(b => b.classList.remove('active'));
+                document.querySelectorAll('.left-tab-content').forEach(c => c.classList.remove('active'));
+                btn.classList.add('active');
+                document.getElementById(btn.dataset.leftTarget).classList.add('active');
+            });
+        });
+
+        // ─── Advanced Toggle ───
+        const advancedToggle = document.getElementById('advancedToggle');
+        const advancedContent = document.getElementById('advancedContent');
+        advancedToggle.addEventListener('click', () => {
+            advancedToggle.classList.toggle('open');
+            advancedContent.classList.toggle('open');
+        });
+
+        // ─── Chat ───
+        async function sendChat() {
+            const msg = chatInput.value.trim();
+            if (!msg || !sessionId) return;
+            chatInput.value = '';
+            chatSendBtn.disabled = true;
+
+            // Add user bubble
+            const userBubble = document.createElement('div');
+            userBubble.className = 'chat-bubble user';
+            userBubble.textContent = msg;
+            chatMessages.appendChild(userBubble);
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+
+            try {
+                const res = await fetch(`/chat/${sessionId}`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ message: msg }),
+                });
+                const data = await res.json();
+                const assistantBubble = document.createElement('div');
+                assistantBubble.className = 'chat-bubble assistant';
+                assistantBubble.textContent = data.response || data.message || 'No response';
+                chatMessages.appendChild(assistantBubble);
+                chatMessages.scrollTop = chatMessages.scrollHeight;
+
+                // If the chat triggered an iteration, reconnect SSE
+                if (data.should_iterate) {
+                    resetUI(true);
+                    connectSSE();
+                }
+            } catch (e) {
+                const errBubble = document.createElement('div');
+                errBubble.className = 'chat-bubble assistant';
+                errBubble.textContent = 'Error: could not reach the server.';
+                chatMessages.appendChild(errBubble);
+            }
+            chatSendBtn.disabled = false;
+        }
+
+        chatSendBtn.addEventListener('click', sendChat);
+        chatInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChat(); }
+        });
+
+        // ─── Memory Display ───
+        async function fetchMemories() {
+            if (!sessionId) return;
+            try {
+                const res = await fetch(`/memory?session_id=${sessionId}`);
+                if (!res.ok) return;
+                const data = await res.json();
+                const memories = data.memories || [];
+                if (memories.length === 0) { memorySection.style.display = 'none'; return; }
+                memorySection.style.display = '';
+                memoryCards.innerHTML = '';
+                memories.slice(0, 5).forEach(m => {
+                    const card = document.createElement('div');
+                    card.className = 'memory-card';
+                    card.innerHTML = `<span class="memory-key">${m.key || m.category}:</span>${m.value}`;
+                    memoryCards.appendChild(card);
+                });
+            } catch(e) { /* silent */ }
+        }
+
+        // ─── Version Timeline ───
+        async function fetchHistory() {
+            if (!sessionId) return;
+            const res = await fetch(`/history/${sessionId}`);
+            if (!res.ok) return;
+            const data = await res.json();
+            const versions = data.versions || [];
+            if (versions.length === 0) { versionTimeline.style.display = 'none'; return; }
+            versionTimeline.style.display = '';
+            timelineTrack.innerHTML = '';
+            versions.forEach((v, i) => {
+                if (i > 0) {
+                    const line = document.createElement('div');
+                    line.className = 'timeline-line' + (v.is_current ? '' : ' filled');
+                    timelineTrack.appendChild(line);
+                }
+                const dot = document.createElement('div');
+                dot.className = 'timeline-dot' + (v.is_current ? ' active' : '');
+                dot.title = `v${v.version}: ${v.description}`;
+                dot.onclick = () => checkoutVersion(v.version);
+                timelineTrack.appendChild(dot);
+            });
+        }
 
         // Agent Filtering
         document.querySelectorAll('.agent-node').forEach(n => {
@@ -1118,10 +1597,13 @@
         function resetUI(keepSession = false) {
             eventLog.innerHTML = '';
             terminalOutput.innerHTML = '';
-            progressFill.style.width = '0%';
             completedAgents = 0;
             document.querySelectorAll('.agent-node').forEach(n => {
                 n.classList.remove('running', 'done');
+            });
+            document.querySelectorAll('.agent-tasks').forEach(el => { el.innerHTML = ''; });
+            document.querySelectorAll('.agent-status-item').forEach(el => {
+                el.classList.remove('running', 'done');
             });
             currentStreamAgent = null;
             currentDetails = null;
@@ -1140,6 +1622,9 @@
 
                 if (ev.event === 'agent_start') {
                     document.getElementById(`node-${ev.agent}`).classList.add('running');
+                    // Update bottom bar status
+                    const statusItem = document.getElementById(`status-${ev.agent}`);
+                    if (statusItem) statusItem.classList.add('running');
                     currentStreamAgent = ev.agent;
                     currentChunkBuffer = '';
                     
@@ -1176,12 +1661,48 @@
                     node.classList.remove('running');
                     node.classList.add('done');
                     completedAgents++;
-                    progressFill.style.width = `${(completedAgents / 4) * 100}%`;
+                    // Update bottom bar status
+                    const statusItem = document.getElementById(`status-${ev.agent}`);
+                    if (statusItem) { statusItem.classList.remove('running'); statusItem.classList.add('done'); }
                     if (currentDetails) {
                         currentDetails.querySelector('.thinking-summary').innerHTML = `${ev.agent} reasoning`;
                         currentDetails.open = false;
                         currentDetails = null;
                         currentDetailsContent = null;
+                    }
+                }
+                else if (ev.event === 'tasks') {
+                    // Render task checklist below the pipeline node
+                    const container = document.getElementById(`tasks-${ev.agent}`);
+                    if (container) {
+                        container.innerHTML = '';
+                        ev.tasks.forEach(t => {
+                            const item = document.createElement('div');
+                            item.className = 'task-item';
+                            item.id = `task-${ev.agent}-${t.id}`;
+                            item.innerHTML = `<span class="task-check"></span><span class="task-text">${t.text}</span>`;
+                            container.appendChild(item);
+                        });
+                        // Mark first task as active
+                        const first = container.querySelector('.task-item');
+                        if (first) first.classList.add('active');
+                    }
+                }
+                else if (ev.event === 'task_done') {
+                    const item = document.getElementById(`task-${ev.agent}-${ev.task_id}`);
+                    if (item) {
+                        item.classList.remove('active');
+                        item.classList.add('done');
+                        // Activate next task
+                        const next = item.nextElementSibling;
+                        if (next && !next.classList.contains('done')) next.classList.add('active');
+                    }
+                }
+                else if (ev.event === 'task_update') {
+                    const item = document.getElementById(`task-${ev.agent}-${ev.task_id}`);
+                    if (item) {
+                        const textEl = item.querySelector('.task-text');
+                        if (textEl) textEl.textContent = ev.text;
                     }
                 }
                 else if (ev.event === 'agent_output') {
@@ -1202,6 +1723,7 @@
                     downloadBtn.classList.add('enabled');
                     document.getElementById('launchPreviewBtn').disabled = false;
                     fetchHistory();
+                    fetchMemories();
                     eventSource.close();
                 }
                 else if (ev.event === 'error') {
@@ -1223,22 +1745,6 @@
                             <div class="log-content"><ul>${keys}</ul></div>`;
             eventLog.appendChild(el);
             eventLog.scrollTop = eventLog.scrollHeight;
-        }
-
-        async function fetchHistory() {
-            if (!sessionId) return;
-            const res = await fetch(`/history/${sessionId}`);
-            if (!res.ok) return;
-            const data = await res.json();
-            historySection.classList.add('visible');
-            historyList.innerHTML = '';
-            data.versions.forEach(v => {
-                const item = document.createElement('div');
-                item.className = 'history-item' + (v.is_current ? ' active' : '');
-                item.innerHTML = `<span>${v.description}</span> <span>v${v.version}</span>`;
-                item.onclick = () => checkoutVersion(v.version);
-                historyList.appendChild(item);
-            });
         }
 
         async function checkoutVersion(version) {

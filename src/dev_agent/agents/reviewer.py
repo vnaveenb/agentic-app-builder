@@ -9,6 +9,7 @@ from typing import Any
 from pydantic import BaseModel
 
 from shared.providers import get_llm
+from src.dev_agent.agents.retry import REVIEWER_TASKS, emit_task_done, emit_tasks, retry_llm_call
 from src.dev_agent.pipeline.state import DevPipelineState
 
 logger = logging.getLogger(__name__)
@@ -50,6 +51,9 @@ async def reviewer_node(state: DevPipelineState) -> dict[str, Any]:
 
     if queue:
         await queue.put({"event": "agent_start", "agent": "reviewer"})
+        await emit_tasks(queue, "reviewer", REVIEWER_TASKS)
+
+    await emit_task_done(queue, "reviewer", 0)  # Reviewing code quality
 
     # Build file summary — send full content so the LLM can review properly
     files_summary = ""
@@ -70,12 +74,23 @@ async def reviewer_node(state: DevPipelineState) -> dict[str, Any]:
 
     llm = get_llm(temperature=0.3)
     structured_llm = llm.with_structured_output(_ReviewOutput)
-    result: _ReviewOutput = await structured_llm.ainvoke(prompt)  # type: ignore[assignment]
+    result: _ReviewOutput = await retry_llm_call(
+        structured_llm.ainvoke,
+        prompt,
+        agent_name="reviewer",
+        queue=queue,
+        task_id=1,
+        task_text="Applying improvements",
+    )  # type: ignore[assignment]
+
+    await emit_task_done(queue, "reviewer", 1)  # Applying improvements
 
     # Merge: start with ALL original files, then overlay reviewer's modifications.
     # This prevents the old bug where unmodified files were silently dropped.
     merged_files = dict(files)
     merged_files.update(result.improved_files)
+
+    await emit_task_done(queue, "reviewer", 2)  # Generating review notes
 
     logger.info("Reviewer modified %d/%d files, %d notes",
                 len(result.improved_files), len(files), len(result.review_notes))

@@ -7,6 +7,7 @@ import logging
 from typing import Any
 
 from shared.providers import get_llm
+from src.dev_agent.agents.retry import PLANNER_TASKS, emit_task_done, emit_tasks, retry_llm_call
 from src.dev_agent.pipeline.state import DevPipelineState, Plan
 
 logger = logging.getLogger(__name__)
@@ -43,6 +44,9 @@ async def planner_node(state: DevPipelineState) -> dict[str, Any]:
 
     if queue:
         await queue.put({"event": "agent_start", "agent": "planner"})
+        await emit_tasks(queue, "planner", PLANNER_TASKS)
+
+    await emit_task_done(queue, "planner", 0)  # Analyzing requirements
 
     llm = get_llm(temperature=0.2)
     structured_llm = llm.with_structured_output(Plan)
@@ -62,7 +66,19 @@ async def planner_node(state: DevPipelineState) -> dict[str, Any]:
         pass  # Memory is optional — don't break the pipeline
 
     prompt = _PLANNER_PROMPT.format(idea=state["idea"]) + memory_context
-    plan: Plan = await structured_llm.ainvoke(prompt)  # type: ignore[assignment]
+
+    await emit_task_done(queue, "planner", 1)  # Designing architecture
+
+    plan: Plan = await retry_llm_call(
+        structured_llm.ainvoke,
+        prompt,
+        agent_name="planner",
+        queue=queue,
+        task_id=1,
+        task_text="Designing architecture",
+    )  # type: ignore[assignment]
+
+    await emit_task_done(queue, "planner", 2)  # Defining file structure
 
     logger.info("Plan created: app=%s, runtime=%s, files=%d",
                 plan.app_name, plan.runtime, len(plan.estimated_files))

@@ -7,6 +7,7 @@ import logging
 from typing import Any
 
 from shared.providers import get_llm
+from src.dev_agent.agents.retry import TESTER_TASKS, emit_task_done, emit_tasks, retry_llm_call
 from src.dev_agent.pipeline.executor import run_tests_in_sandbox
 from src.dev_agent.pipeline.state import DevPipelineState, TestReport
 
@@ -37,9 +38,12 @@ async def tester_node(state: DevPipelineState) -> dict[str, Any]:
 
     if queue:
         await queue.put({"event": "agent_start", "agent": "tester"})
+        await emit_tasks(queue, "tester", TESTER_TASKS)
 
     # Step 1: Run actual tests in sandbox
     sandbox_report = await run_tests_in_sandbox(files, runtime, queue)
+
+    await emit_task_done(queue, "tester", 0)  # Running sandbox tests
 
     logger.info(
         "Sandbox results: passed=%d failed=%d critical=%s",
@@ -62,11 +66,20 @@ async def tester_node(state: DevPipelineState) -> dict[str, Any]:
     try:
         llm = get_llm(temperature=0.0)
         structured_llm = llm.with_structured_output(TestReport)
-        llm_report: TestReport = await structured_llm.ainvoke(prompt)  # type: ignore[assignment]
+        llm_report: TestReport = await retry_llm_call(
+            structured_llm.ainvoke,
+            prompt,
+            agent_name="tester",
+            queue=queue,
+            task_id=1,
+            task_text="Performing static analysis",
+        )  # type: ignore[assignment]
     except Exception as exc:
         logger.warning("LLM static analysis failed: %s", exc)
         # Fall back to sandbox-only results
         llm_report = sandbox_report
+
+    await emit_task_done(queue, "tester", 1)  # Performing static analysis
 
     # Merge: sandbox counts are authoritative
     merged_report = TestReport(
@@ -78,6 +91,8 @@ async def tester_node(state: DevPipelineState) -> dict[str, Any]:
         test_cases=sandbox_report.test_cases,
         execution_time_ms=sandbox_report.execution_time_ms,
     )
+
+    await emit_task_done(queue, "tester", 2)  # Merging results
 
     if queue:
         await queue.put({

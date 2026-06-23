@@ -199,8 +199,19 @@ class PythonRunner(SandboxRunner):
             # Inject a fallback root route if the app doesn't already serve /
             # and there's an index.html available in the generated files
             source = _ensure_flask_root_route(source, files, tmp)
+            # Strip app.run()/__main__ so the Flask CLI — not the generated
+            # code — owns the bind port. Generated code routinely hardcodes
+            # app.run(port=5000) (or omits the port), which would bind the
+            # wrong port and leave the preview supervisor waiting forever.
+            source = _strip_server_startup(source)
             entry_path.write_text(source, encoding="utf-8")
-            cmd = ["python", f"{entry_stem}.py"]
+            cmd = [
+                "python", "-m", "flask",
+                "--app", entry_stem,
+                "run",
+                "--host", "0.0.0.0",
+                "--port", str(port),
+            ]
         else:
             # Generic fallback: serve as static if index.html exists,
             # otherwise run the script directly with PORT injected

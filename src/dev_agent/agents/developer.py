@@ -11,6 +11,7 @@ from typing import Any
 from pydantic import BaseModel, ValidationError
 
 from shared.providers import get_llm
+from src.dev_agent.agents.retry import DEVELOPER_TASKS, emit_task_done, emit_tasks, retry_llm_call
 from src.dev_agent.pipeline.state import DevPipelineState
 
 logger = logging.getLogger(__name__)
@@ -138,6 +139,9 @@ async def developer_node(state: DevPipelineState) -> dict[str, Any]:
 
     if queue:
         await queue.put({"event": "agent_start", "agent": "developer", "data": {"iteration": iteration + 1}})
+        await emit_tasks(queue, "developer", DEVELOPER_TASKS)
+
+    await emit_task_done(queue, "developer", 0)  # Preparing prompt
 
     runtime = state["runtime"]
     runtime_instructions = _RUNTIME_INSTRUCTIONS.get(runtime, _RUNTIME_INSTRUCTIONS["python"])
@@ -174,31 +178,40 @@ async def developer_node(state: DevPipelineState) -> dict[str, Any]:
     result: _DeveloperOutput | None = None
     last_error: Exception | None = None
 
-    for attempt in range(3):
-        try:
-            raw_response = await structured_llm.ainvoke(prompt)
-            if isinstance(raw_response, dict):
-                if raw_response.get("parsed"):
-                    result = raw_response["parsed"]
-                    break
-                # Fallback: try to repair truncated/malformed JSON from raw output
-                raw_text = raw_response.get("raw", "")
+    # Retry with exponential backoff for transient API errors (503/429)
+    try:
+        raw_response = await retry_llm_call(
+            structured_llm.ainvoke,
+            prompt,
+            agent_name="developer",
+            queue=queue,
+            task_id=1,
+            task_text="Generating code",
+        )
+        if isinstance(raw_response, dict):
+            if raw_response.get("parsed"):
+                result = raw_response["parsed"]
             else:
-                raw_text = raw_response
+                raw_text = raw_response.get("raw", "")
+                if hasattr(raw_text, "content"):
+                    raw_text = raw_text.content
+                result = _repair_parse(str(raw_text))
+        else:
+            raw_text = raw_response
             if hasattr(raw_text, "content"):
                 raw_text = raw_text.content
             result = _repair_parse(str(raw_text))
-            if result:
-                break
-        except (ValidationError, Exception) as exc:
-            last_error = exc
-            logger.warning("Developer parse attempt %d failed: %s", attempt + 1, exc)
-            await asyncio.sleep(1)
+    except (ValidationError, Exception) as exc:
+        last_error = exc
+        logger.warning("Developer generation failed: %s", exc)
 
     if result is None:
         raise RuntimeError(
-            f"Failed to parse developer output after 3 attempts: {last_error}"
+            f"Failed to parse developer output: {last_error}"
         )
+
+    await emit_task_done(queue, "developer", 1)  # Generating code
+    await emit_task_done(queue, "developer", 2)  # Parsing & validating output
 
     # Convert to dict[str, str]
     files = {entry.filename: entry.content for entry in result.files}
