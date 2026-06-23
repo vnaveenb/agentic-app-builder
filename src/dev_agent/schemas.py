@@ -36,9 +36,10 @@ class StatusResponse(BaseModel):
 
 
 class PreviewStartResponse(BaseModel):
-    port: int
+    port: int = 0  # 0 for static previews (served directly, no subprocess)
     url: str
     status: str
+    mode: str = "server"  # "static" | "server"
 
 
 class IterateRequest(BaseModel):

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-from functools import partial
 from typing import Any
 
 from src.dev_agent.pipeline.state import TestCase, TestReport
@@ -60,12 +59,11 @@ async def run_tests_in_sandbox(
     runtime: str,
     event_queue: asyncio.Queue[dict[str, Any]] | None = None,
 ) -> TestReport:
-    """Run tests using the appropriate sandbox runner. Non-blocking (thread executor)."""
-    runner = get_runner(runtime)
-    loop = asyncio.get_event_loop()
-    sandbox_report: SandboxTestReport = await loop.run_in_executor(
-        None, partial(runner.run_tests, files, event_queue)
-    )
+    """Run tests via the execution gateway (in-process locally, sandbox service in docker)."""
+    # Deferred import avoids a circular dependency (gateway imports get_runner here).
+    from src.dev_agent.sandbox.gateway import run_tests as _gateway_run_tests
+
+    sandbox_report: SandboxTestReport = await _gateway_run_tests(files, runtime, event_queue)
     # Convert sandbox TestReport dataclass to pipeline Pydantic TestReport
     return TestReport(
         has_critical_bugs=sandbox_report.has_critical_bugs,

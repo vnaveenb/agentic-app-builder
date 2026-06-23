@@ -1,0 +1,260 @@
+/* ════════════════════════════════════════════════════════════════════════════
+   AI Dev Agent — "Control Room" theme layer.
+   Loaded AFTER the base styles: it refreshes the token palette, adds depth and
+   atmosphere, formalizes spacing/radius/shadow scales, supplies focus/empty/
+   error states, and styles the new feature components (timers, test explorer,
+   toasts, memory manager). Because the base CSS is token-driven, overriding the
+   :root variables cascades a full visual refresh without restructuring rules.
+   ════════════════════════════════════════════════════════════════════════════ */
+
+:root {
+    /* Deeper, warmer near-black canvas with a single signature accent. */
+    --bg-base: #0a0a0c;
+    --bg-panel: #151518;
+    --bg-panel-solid: #151518;
+    --border-subtle: rgba(255, 255, 255, 0.08);
+    --border-hover: rgba(255, 255, 255, 0.18);
+
+    --text-primary: #f4f4f6;
+    --text-secondary: #a1a1ad;
+    --text-muted: #6b6b78;
+
+    /* Signature accent — a refined electric indigo/blue. */
+    --accent-cyan: #5b8cff;
+    --accent-violet: #8b7bff;
+    --accent-emerald: #34d399;
+    --accent-rose: #fb6f84;
+    --accent-amber: #fbbf24;
+
+    /* Formal scales (used by the new components; available to all). */
+    --space-1: 4px;
+    --space-2: 8px;
+    --space-3: 12px;
+    --space-4: 16px;
+    --space-6: 24px;
+    --space-8: 32px;
+
+    --radius-sm: 6px;
+    --radius-md: 10px;
+    --radius-lg: 14px;
+    --radius-xl: 20px;
+
+    --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4);
+    --shadow-2: 0 6px 20px rgba(0, 0, 0, 0.45);
+    --shadow-glow: 0 0 0 1px rgba(91, 140, 255, 0.25), 0 8px 30px rgba(91, 140, 255, 0.15);
+}
+
+/* ── Atmosphere: layered glow + faint engineering grid ── */
+body {
+    background:
+        radial-gradient(1200px 600px at 15% -10%, rgba(91, 140, 255, 0.10), transparent 60%),
+        radial-gradient(1000px 500px at 100% 0%, rgba(139, 123, 255, 0.08), transparent 55%),
+        var(--bg-base);
+}
+body::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: 0;
+    background-image:
+        linear-gradient(rgba(255, 255, 255, 0.022) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255, 255, 255, 0.022) 1px, transparent 1px);
+    background-size: 38px 38px;
+    mask-image: radial-gradient(ellipse 90% 80% at 50% 30%, #000 40%, transparent 100%);
+}
+.app-layout { position: relative; z-index: 1; }
+
+/* ── Panels: more depth ── */
+.panel {
+    box-shadow: var(--shadow-2);
+    border-color: var(--border-subtle);
+}
+
+/* ── Orchestrated load reveal (staggered) ── */
+@keyframes panel-rise {
+    from { opacity: 0; transform: translateY(10px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+.left-panel  { animation: panel-rise 0.5s cubic-bezier(0.22, 1, 0.36, 1) both; }
+.center-panel{ animation: panel-rise 0.5s cubic-bezier(0.22, 1, 0.36, 1) 0.08s both; }
+.right-panel { animation: panel-rise 0.5s cubic-bezier(0.22, 1, 0.36, 1) 0.16s both; }
+.bottom-bar  { animation: panel-rise 0.5s cubic-bezier(0.22, 1, 0.36, 1) 0.24s both; }
+@media (prefers-reduced-motion: reduce) {
+    .left-panel, .center-panel, .right-panel, .bottom-bar { animation: none; }
+}
+
+/* ── Buttons: cohesive + accessible focus ── */
+.btn-primary {
+    background: linear-gradient(135deg, var(--accent-cyan), var(--accent-violet));
+    box-shadow: var(--shadow-glow);
+    letter-spacing: 0.3px;
+}
+.btn-primary:hover { background: linear-gradient(135deg, #6d9bff, #9b8cff); }
+
+:where(button, a, input, textarea, select, .agent-node, [tabindex]):focus-visible {
+    outline: 2px solid var(--accent-cyan);
+    outline-offset: 2px;
+    border-radius: 4px;
+}
+
+/* ── Pipeline node timers ── */
+.agent-timer {
+    font-family: var(--font-mono);
+    font-size: 0.62rem;
+    color: var(--text-muted);
+    margin-top: 2px;
+    min-height: 0.8em;
+    letter-spacing: 0.3px;
+}
+.agent-node.running .agent-timer { color: var(--accent-cyan); }
+.agent-node.done .agent-timer { color: var(--accent-emerald); }
+
+/* ── Build timer (bottom bar) ── */
+.build-timer {
+    display: none;
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+    color: var(--text-secondary);
+    padding: 4px 10px;
+    margin-right: auto;
+    margin-left: 12px;
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-xl);
+    background: rgba(0, 0, 0, 0.3);
+}
+.build-timer.visible { display: inline-block; }
+
+/* ── Test-case explorer ── */
+.test-explorer .tc-counts {
+    margin-left: auto;
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+}
+.test-explorer .tc-details > summary {
+    cursor: pointer;
+    color: var(--text-secondary);
+    font-size: 0.82rem;
+    padding: 4px 0;
+    user-select: none;
+}
+.test-explorer .tc-list { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.test-explorer .tc {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 8px;
+    border-radius: var(--radius-sm);
+    background: rgba(0, 0, 0, 0.25);
+    font-size: 0.8rem;
+}
+.test-explorer .tc-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.test-explorer .tc.pass .tc-dot { background: var(--accent-emerald); }
+.test-explorer .tc.fail .tc-dot { background: var(--accent-rose); }
+.test-explorer .tc-name { color: var(--text-primary); }
+.test-explorer .tc-err { color: var(--accent-rose); font-family: var(--font-mono); font-size: 0.72rem; margin-left: auto; }
+
+/* ── Preview error banner ── */
+.preview-banner {
+    display: none;
+    position: absolute;
+    left: 12px;
+    right: 12px;
+    bottom: 12px;
+    z-index: 5;
+    padding: 10px 14px;
+    background: rgba(251, 111, 132, 0.12);
+    border: 1px solid rgba(251, 111, 132, 0.5);
+    color: #ffd7dd;
+    border-radius: var(--radius-md);
+    font-size: 0.82rem;
+    font-family: var(--font-mono);
+    line-height: 1.4;
+    max-height: 40%;
+    overflow: auto;
+    box-shadow: var(--shadow-2);
+}
+
+/* ── Memory manager ── */
+.memory-card {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 8px;
+}
+.memory-card .memory-body { flex: 1; }
+.memory-card .memory-meta { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.memory-score {
+    font-family: var(--font-mono);
+    font-size: 0.65rem;
+    color: var(--accent-violet);
+    background: rgba(139, 123, 255, 0.12);
+    padding: 1px 5px;
+    border-radius: 4px;
+}
+.memory-del {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 0.8rem;
+    line-height: 1;
+    transition: color 0.15s;
+}
+.memory-del:hover { color: var(--accent-rose); }
+
+/* ── Toasts ── */
+.toast-host {
+    position: fixed;
+    bottom: 18px;
+    right: 18px;
+    z-index: 100;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    pointer-events: none;
+}
+.toast {
+    pointer-events: auto;
+    padding: 10px 16px;
+    border-radius: var(--radius-md);
+    background: var(--bg-panel);
+    border: 1px solid var(--border-hover);
+    color: var(--text-primary);
+    font-size: 0.82rem;
+    box-shadow: var(--shadow-2);
+    opacity: 0;
+    transform: translateY(8px);
+    transition: opacity 0.25s, transform 0.25s;
+    border-left: 3px solid var(--accent-cyan);
+}
+.toast.show { opacity: 1; transform: translateY(0); }
+.toast.success { border-left-color: var(--accent-emerald); }
+.toast.error { border-left-color: var(--accent-rose); }
+.toast.info { border-left-color: var(--accent-violet); }
+
+/* ── Empty states ── */
+.placeholder-view {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    color: var(--text-muted);
+    font-size: 0.9rem;
+    text-align: center;
+    padding: 24px;
+}
+
+/* ── Responsive fallback so the fixed grid degrades on small screens ── */
+@media (max-width: 980px) {
+    .app-layout {
+        grid-template-columns: 1fr !important;
+        grid-template-rows: auto auto auto auto;
+        height: auto;
+        min-height: 100vh;
+        overflow: auto;
+    }
+    body { overflow: auto; }
+    .gutter { display: none; }
+    .panel { min-height: 320px; }
+}

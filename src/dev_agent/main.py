@@ -14,25 +14,25 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from typing import Any
 
-import httpx
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, Response, StreamingResponse
+from fastapi.staticfiles import StaticFiles
+from sqlalchemy import text as select_text
 
 from src.dev_agent.cache import (
     cache_session_state,
     close_redis,
-    get_redis,
+)
+from src.dev_agent.cache import (
     health_check as redis_health_check,
 )
 from src.dev_agent.db.database import async_session_factory, close_db, init_db
 from src.dev_agent.db.models import Session as DBSession
-from sqlalchemy import text as select_text
 from src.dev_agent.pipeline.base import PipelineBackend
 from src.dev_agent.pipeline.crew_backend import CrewAIBackend
-from src.dev_agent.pipeline.executor import get_runner, get_runner_for_files
 from src.dev_agent.pipeline.graph import LangGraphBackend
 from src.dev_agent.pipeline.state import DevPipelineState
-from src.dev_agent.sandbox import preview_server
+from src.dev_agent.sandbox import gateway, preview_server
 from src.dev_agent.schemas import (
     ChatHistoryResponse,
     ChatMessageRequest,
@@ -52,12 +52,12 @@ from src.dev_agent.schemas import (
     SessionSummary,
     StatusResponse,
     UpdateFilesRequest,
-    VersionResponse,
-    VersionSchema,
 )
 from src.dev_agent.versioning.differ import compute_diff
 from src.dev_agent.versioning.store import (
     checkout_version as db_checkout_version,
+)
+from src.dev_agent.versioning.store import (
     create_version,
     get_next_version_number,
     get_version,
@@ -90,49 +90,6 @@ _session_histories: dict[str, list[dict[str, Any]]] = {}
 _session_backends: dict[str, str] = {}
 
 
-# ── Console capture injection ─────────────────────────────────────────────────
-
-_CONSOLE_CAPTURE_SCRIPT = b"""<script>
-(function(){
-  var _origError = console.error;
-  var _origWarn = console.warn;
-  function _send(level, args) {
-    try {
-      var msg = Array.prototype.slice.call(args).map(function(a) {
-        return typeof a === 'object' ? JSON.stringify(a) : String(a);
-      }).join(' ');
-      window.parent.postMessage({type:'console', level:level, msg:msg}, '*');
-    } catch(e) {}
-  }
-  console.error = function() { _send('error', arguments); _origError.apply(console, arguments); };
-  console.warn = function() { _send('warn', arguments); _origWarn.apply(console, arguments); };
-  window.onerror = function(msg, src, line, col, err) {
-    _send('error', [msg + ' (' + (src||'') + ':' + line + ':' + col + ')']);
-  };
-  window.onunhandledrejection = function(e) {
-    _send('error', ['Unhandled Promise: ' + (e.reason || e)]);
-  };
-})();
-</script>
-"""
-
-
-def _inject_console_capture(content: bytes) -> bytes:
-    """Inject console-capture script into HTML after <head> or <body>."""
-    lower = content.lower()
-    idx = lower.find(b"<head>")
-    if idx != -1:
-        insert_at = idx + len(b"<head>")
-        return content[:insert_at] + _CONSOLE_CAPTURE_SCRIPT + content[insert_at:]
-    idx = lower.find(b"<body")
-    if idx != -1:
-        close = lower.find(b">", idx)
-        if close != -1:
-            insert_at = close + 1
-            return content[:insert_at] + _CONSOLE_CAPTURE_SCRIPT + content[insert_at:]
-    return _CONSOLE_CAPTURE_SCRIPT + content
-
-
 # ── Lifespan ──────────────────────────────────────────────────────────────────
 
 
@@ -150,6 +107,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
 
 app = FastAPI(title="project-7-ai-dev-agent", lifespan=lifespan)
+app.mount(
+    "/static",
+    StaticFiles(directory=str(pathlib.Path(__file__).parent / "static")),
+    name="static",
+)
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
@@ -302,12 +264,11 @@ async def update_files(session_id: str, req: UpdateFilesRequest) -> dict[str, st
 
     state["files"] = req.files
 
-    # If preview is active, restart it with new files
-    if session_id in preview_server._allocated_ports:
-        runner = get_runner(state["runtime"])
-        preview_server.stop_preview(session_id, runner)
+    # If preview is active (static or server), restart it with new files
+    if gateway.is_active(session_id):
+        await gateway.preview_stop(session_id, req.files, state["runtime"])
         try:
-            await preview_server.start_preview(session_id, req.files, runner)
+            await gateway.preview_start(session_id, req.files, state["runtime"])
         except RuntimeError:
             pass  # Preview restart failed — user can retry manually
 
@@ -334,8 +295,7 @@ async def iterate(session_id: str, req: IterateRequest) -> GenerateResponse:
         raise HTTPException(400, "No plan found — run /generate first")
 
     # Stop any active preview
-    runner = get_runner(state["runtime"])
-    preview_server.stop_preview(session_id, runner)
+    await gateway.preview_stop(session_id, state["files"], state["runtime"])
 
     # Set up new event queue for streaming
     queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
@@ -399,12 +359,11 @@ async def checkout_version_endpoint(session_id: str, version: int) -> dict[str, 
             if state:
                 state["files"] = rollback.files_snapshot
 
-                # Restart preview if active
-                if session_id in preview_server._allocated_ports:
-                    runner = get_runner(state["runtime"])
-                    preview_server.stop_preview(session_id, runner)
+                # Restart preview if active (static or server)
+                if gateway.is_active(session_id):
+                    await gateway.preview_stop(session_id, state["files"], state["runtime"])
                     try:
-                        await preview_server.start_preview(session_id, state["files"], runner)
+                        await gateway.preview_start(session_id, state["files"], state["runtime"])
                     except RuntimeError:
                         pass
 
@@ -436,12 +395,11 @@ async def checkout_version_endpoint(session_id: str, version: int) -> dict[str, 
     for h in history:
         h["is_current"] = (h["version"] == version)
 
-    # If preview is active, restart it with new files
-    if session_id in preview_server._allocated_ports:
-        runner = get_runner(state["runtime"])
-        preview_server.stop_preview(session_id, runner)
+    # If preview is active (static or server), restart it with new files
+    if gateway.is_active(session_id):
+        await gateway.preview_stop(session_id, state["files"], state["runtime"])
         try:
-            await preview_server.start_preview(session_id, state["files"], runner)
+            await gateway.preview_start(session_id, state["files"], state["runtime"])
         except RuntimeError:
             pass
 
@@ -593,8 +551,7 @@ async def send_chat_message(session_id: str, req: ChatMessageRequest) -> ChatRes
     if should_iterate and state.get("status") == "done" and state.get("plan"):
         iteration_feedback = req.message
         # Kick off iterate pipeline
-        runner = get_runner(state["runtime"])
-        preview_server.stop_preview(session_id, runner)
+        await gateway.preview_stop(session_id, state["files"], state["runtime"])
 
         iter_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
         _event_queues[session_id] = iter_queue
@@ -726,30 +683,27 @@ async def preview_start(session_id: str) -> PreviewStartResponse:
     if state["status"] != "done":
         raise HTTPException(400, "Pipeline not complete — cannot start preview")
 
-    # Use smart runner selection that considers both runtime AND actual files
-    runner = get_runner_for_files(state["runtime"], state["files"])
-    logger.info("Preview start: runtime=%s, runner=%s, files=%s",
-                state["runtime"], type(runner).__name__, list(state["files"].keys()))
     try:
-        info = await preview_server.start_preview(session_id, state["files"], runner)
+        info = await gateway.preview_start(session_id, state["files"], state["runtime"])
     except RuntimeError as exc:
+        # Surface the real failure (captured stderr) so the UI can show it.
         raise HTTPException(503, str(exc)) from None
 
     return PreviewStartResponse(
-        port=info["port"],  # type: ignore[arg-type]
-        url=info["url"],  # type: ignore[arg-type]
-        status=info["status"],  # type: ignore[arg-type]
+        port=int(info.get("port", 0)),
+        url=str(info["url"]),
+        status=str(info["status"]),
+        mode=str(info.get("mode", "server")),
     )
 
 
 @app.post("/preview/{session_id}/stop")
-def preview_stop(session_id: str) -> dict[str, str]:
+async def preview_stop(session_id: str) -> dict[str, str]:
     state = _session_states.get(session_id)
     if not state:
         raise HTTPException(404, "Session not found")
 
-    runner = get_runner(state["runtime"])
-    preview_server.stop_preview(session_id, runner)
+    await gateway.preview_stop(session_id, state["files"], state["runtime"])
     return {"status": "stopped"}
 
 
@@ -758,54 +712,9 @@ def preview_stop(session_id: str) -> dict[str, str]:
     methods=["GET", "POST", "PUT", "DELETE"],
 )
 async def preview_proxy(session_id: str, path: str, request: Request) -> Response:
-    """Reverse-proxy requests to the session's ephemeral preview server."""
-    if session_id not in preview_server._allocated_ports:
-        raise HTTPException(404, "No preview running for this session")
-
-    port = preview_server._allocated_ports[session_id]
-    target_url = f"http://127.0.0.1:{port}/{path}"
-
-    # Retry with exponential backoff — the preview may still be binding
+    """Serve the session's preview via the execution gateway (static or server)."""
     body = await request.body()
-    backoff_schedule = [0.5, 1.0, 2.0, 3.0, 4.0]  # 5 retries, ~10.5s total
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        for attempt, delay in enumerate(backoff_schedule):
-            try:
-                resp = await client.request(
-                    method=request.method,
-                    url=target_url,
-                    content=body,
-                )
-                content = resp.content
-                headers = dict(resp.headers)
-
-                # Inject console-capture script into HTML responses
-                ct = headers.get("content-type", "")
-                if "text/html" in ct:
-                    content = _inject_console_capture(content)
-                    headers["content-length"] = str(len(content))
-
-                return Response(
-                    content=content,
-                    status_code=resp.status_code,
-                    headers=headers,
-                )
-            except httpx.ConnectError:
-                if attempt < len(backoff_schedule) - 1:
-                    await asyncio.sleep(delay)
-
-    # All retries failed — check if the process died
-    pid = preview_server._active_pids.get(session_id)
-    if pid:
-        try:
-            os.kill(pid, 0)
-        except OSError:
-            logger.error("Preview process pid=%d crashed for session %s", pid, session_id[:12])
-            raise HTTPException(
-                502, "Preview process crashed — check logs for details"
-            ) from None
-    logger.error("Preview proxy exhausted retries for session %s port %d", session_id[:12], port)
-    raise HTTPException(502, f"Preview server on port {port} not responding after {len(backoff_schedule)} retries") from None
+    return await gateway.serve(session_id, path, request.method, body, request.url.query)
 
 
 # ── Background task ───────────────────────────────────────────────────────────

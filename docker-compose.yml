@@ -3,17 +3,43 @@ services:
     build: .
     ports:
       - "8007:8007"
-      - "9100-9120:9100-9120"
     env_file:
       - .env
     environment:
       DATABASE_URL: postgresql+asyncpg://devagent:devagent@postgres:5432/devagent
       REDIS_URL: redis://redis:6379/0
+      # Delegate ALL generated-code execution (tests + previews) to the
+      # isolated sandbox service, which holds no secrets.
+      SANDBOX_URL: http://sandbox:8009
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
+      sandbox:
+        condition: service_started
+    networks:
+      - data
+      - exec
+    restart: unless-stopped
+
+  # Isolated executor for untrusted, model-generated code. Deliberately has NO
+  # access to .env secrets, the database, or Redis, and sits on a network that
+  # cannot reach them. Previews/tests run here; the app proxies to it.
+  sandbox:
+    build: .
+    command: ["uvicorn", "src.sandbox_service.app:app", "--host", "0.0.0.0", "--port", "8009"]
+    # NOTE: no env_file, no DATABASE_URL/REDIS_URL, no LLM keys.
+    networks:
+      - exec
+    mem_limit: 1g
+    cpus: 1.5
+    pids_limit: 256
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8009/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
     restart: unless-stopped
 
   postgres:
@@ -31,6 +57,8 @@ services:
       interval: 5s
       timeout: 3s
       retries: 5
+    networks:
+      - data
     restart: unless-stopped
 
   redis:
@@ -44,7 +72,13 @@ services:
       interval: 5s
       timeout: 3s
       retries: 5
+    networks:
+      - data
     restart: unless-stopped
+
+networks:
+  data:    # app ↔ postgres ↔ redis (secrets live here)
+  exec:    # app ↔ sandbox (untrusted execution; no DB/Redis/secret reach)
 
 volumes:
   pgdata:
