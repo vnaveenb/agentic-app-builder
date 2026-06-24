@@ -23,7 +23,7 @@ from fastapi.responses import Response
 from src.dev_agent.pipeline.executor import get_runner, get_runner_for_files
 from src.dev_agent.sandbox import preview_server
 from src.dev_agent.sandbox.base import TestReport
-from src.dev_agent.sandbox.console_inject import inject_console_capture
+from src.dev_agent.sandbox.console_inject import prepare_preview_html
 
 logger = logging.getLogger(__name__)
 
@@ -136,7 +136,7 @@ async def serve(session_id: str, path: str, method: str, body: bytes, query: str
             raise HTTPException(502, f"Sandbox preview unreachable: {exc}") from None
     content = resp.content
     if "text/html" in resp.headers.get("content-type", ""):
-        content = inject_console_capture(content)
+        content = prepare_preview_html(content)
     return Response(content=content, status_code=resp.status_code, headers=_proxy_headers(resp))
 
 
@@ -154,7 +154,7 @@ async def _serve_local(session_id: str, path: str, method: str, body: bytes, que
         data = target.read_bytes()
         ctype = mimetypes.guess_type(str(target))[0] or "application/octet-stream"
         if ctype.startswith("text/html"):
-            data = inject_console_capture(data)
+            data = prepare_preview_html(data)
         return Response(content=data, media_type=ctype)
 
     port = preview_server._allocated_ports[session_id]
@@ -168,7 +168,7 @@ async def _serve_local(session_id: str, path: str, method: str, body: bytes, que
                 resp = await client.request(method, target_url, content=body)
                 content = resp.content
                 if "text/html" in resp.headers.get("content-type", ""):
-                    content = inject_console_capture(content)
+                    content = prepare_preview_html(content)
                 return Response(content=content, status_code=resp.status_code, headers=_proxy_headers(resp))
             except httpx.ConnectError:
                 if attempt < len(backoff) - 1:

@@ -64,16 +64,18 @@ _RUNTIME_INSTRUCTIONS = {
 - Entry point must listen on process.env.PORT (default 3000)
 - Include test.js using Node 20 built-in test runner (node:test)
 - Use: const port = process.env.PORT || 3000; server.listen(port)""",
-    "react": """- Use CDN imports: <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-- Use CDN imports: <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-- Use Babel standalone for JSX: <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-- Everything in a single index.html file with embedded <script type="text/babel">
-- Do NOT use npm, webpack, vite, or any build tools
-- Do NOT generate package.json""",
-    "angular": """- Use CDN imports from cdnjs.cloudflare.com for Angular
-- Everything in a single index.html file with embedded scripts
-- Do NOT use npm, ng CLI, or any build tools
-- Do NOT generate package.json""",
+    "react": """- Single self-contained index.html. Do NOT use npm, webpack, vite, or any build tools, and do NOT generate package.json.
+- Load React/ReactDOM/Babel from CDN with these EXACT pinned UMD tags:
+  <script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone@7.26.4/babel.min.js"></script>
+- Put ALL JSX inside a single <script type="text/babel"> ... </script> block.
+- CRITICAL: Do NOT use ES module `import` or `export` statements anywhere. There is no bundler.
+  Access React's API from the global React object instead, e.g. `const { useState, useEffect } = React;`.
+- Mount with: ReactDOM.createRoot(document.getElementById('root')).render(<App />);""",
+    "angular": """- Single self-contained index.html with embedded scripts. Do NOT use npm, ng CLI, or any build tools, and do NOT generate package.json.
+- Load Angular from CDN with EXACT pinned <script src=...> tags from cdnjs.cloudflare.com.
+- Do NOT use ES module `import` or `export` statements anywhere — there is no bundler.""",
     "static": """- Pure HTML/CSS/JS, no frameworks
 - Entry point is index.html
 - Can use multiple .js and .css files

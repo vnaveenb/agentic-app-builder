@@ -207,3 +207,91 @@ def test_strip_server_startup_removes_hardcoded_flask_port() -> None:
     assert "app.run" not in stripped
     assert "__main__" not in stripped
     assert "@app.route('/')" in stripped  # the app itself is preserved
+
+
+# ── React/Babel preview normalization (import-statement crash fix) ─────────────
+
+
+_REACT_IMPORT_HTML = b"""<!doctype html>
+<html><head><title>App</title></head>
+<body><div id="root"></div>
+<script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone@7.26.4/babel.min.js"></script>
+<script type="text/babel">
+import React, { useState } from 'react';
+import { createRoot } from 'react-dom/client';
+function App() { const [n, setN] = useState(0); return <button onClick={() => setN(n + 1)}>{n}</button>; }
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body></html>"""
+
+
+@pytest.mark.unit
+def test_normalize_strips_imports_and_globalizes_react() -> None:
+    from src.dev_agent.sandbox.console_inject import normalize_react_preview
+
+    out = normalize_react_preview(_REACT_IMPORT_HTML)
+    assert b"import React" not in out
+    assert b"import { createRoot }" not in out
+    assert b"typeof React !== 'undefined'" in out  # hooks exposed from the global
+    assert b"useState, useEffect" in out
+    assert b"function App()" in out  # JSX body preserved
+    assert b"ReactDOM.createRoot(document.getElementById('root'))" in out
+
+
+@pytest.mark.unit
+def test_normalize_injects_umd_when_imports_stripped_and_tags_missing() -> None:
+    from src.dev_agent.sandbox.console_inject import normalize_react_preview
+
+    html = b"""<html><head></head><body><div id="root"></div>
+<script type="text/babel">
+import React, { useState } from 'react';
+ReactDOM.createRoot(document.getElementById('root')).render(<div>hi</div>);
+</script></body></html>"""
+    out = normalize_react_preview(html)
+    assert b"react@18.3.1/umd/react.production.min.js" in out
+    assert b"@babel/standalone@7.26.4" in out
+    assert b"import React" not in out
+
+
+@pytest.mark.unit
+def test_normalize_idempotent() -> None:
+    from src.dev_agent.sandbox.console_inject import normalize_react_preview
+
+    once = normalize_react_preview(_REACT_IMPORT_HTML)
+    twice = normalize_react_preview(once)
+    assert once == twice
+
+
+@pytest.mark.unit
+def test_normalize_leaves_global_style_react_untouched() -> None:
+    from src.dev_agent.sandbox.console_inject import normalize_react_preview
+
+    html = b"""<html><head>
+<script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone@7.26.4/babel.min.js"></script>
+</head><body><div id="root"></div>
+<script type="text/babel">
+const { useState } = React;
+function App() { const [n] = useState(0); return <span>{n}</span>; }
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script></body></html>"""
+    assert normalize_react_preview(html) == html
+
+
+@pytest.mark.unit
+def test_normalize_ignores_non_react_html() -> None:
+    from src.dev_agent.sandbox.console_inject import normalize_react_preview
+
+    html = b"<html><head></head><body><h1>Flask page</h1><script>console.log('x')</script></body></html>"
+    assert normalize_react_preview(html) == html
+
+
+@pytest.mark.unit
+def test_prepare_preview_html_combines_normalize_and_console_capture() -> None:
+    from src.dev_agent.sandbox.console_inject import prepare_preview_html
+
+    out = prepare_preview_html(_REACT_IMPORT_HTML)
+    assert b"import React" not in out  # normalized
+    assert b"window.parent.postMessage" in out  # console capture injected
