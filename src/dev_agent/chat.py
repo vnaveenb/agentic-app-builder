@@ -2,43 +2,19 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import uuid
-from datetime import datetime, timezone
 from typing import Any
 
-from shared.providers import get_llm
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.dev_agent.agents.prompts import CHAT_SYSTEM_PROMPT
 from src.dev_agent.db.models import Message
+from src.dev_agent.llm import LLMContext, get_llm_for_role
 from src.dev_agent.memory.memory_store import format_memories_for_prompt, get_relevant_memories
 
 logger = logging.getLogger(__name__)
-
-_CHAT_SYSTEM_PROMPT = """\
-You are an AI development assistant embedded in the Agentic App Builder. You help users:
-1. Refine their app ideas before generation
-2. Explain what was built and suggest improvements
-3. Answer questions about the generated code
-4. Accept iteration feedback (which triggers code regeneration)
-
-Context about the current session:
-- Idea: {idea}
-- Runtime: {runtime}
-- Status: {status}
-- Files: {files}
-
-{memory_context}
-
-Guidelines:
-- Be concise and actionable
-- If the user asks to change/fix/improve something and a build has completed, end your response with:
-  [ACTION:ITERATE] followed by a one-line summary of the change
-- If the user asks a question, answer it directly
-- Reference specific files when discussing code
-"""
 
 _ITERATE_TRIGGER = "[ACTION:ITERATE]"
 
@@ -80,6 +56,7 @@ async def generate_chat_response(
     session_id: str,
     user_message: str,
     session_context: dict[str, Any],
+    ctx: LLMContext | None = None,
 ) -> tuple[str, bool]:
     """Generate an AI response to a user chat message.
 
@@ -103,7 +80,7 @@ async def generate_chat_response(
 
     # System prompt with session context
     files_list = ", ".join(sorted(session_context.get("files", {}).keys())[:15])
-    system_prompt = _CHAT_SYSTEM_PROMPT.format(
+    system_prompt = CHAT_SYSTEM_PROMPT.format(
         idea=session_context.get("idea", "Not set"),
         runtime=session_context.get("runtime", "auto"),
         status=session_context.get("status", "unknown"),
@@ -120,8 +97,8 @@ async def generate_chat_response(
     messages.append({"role": "user", "content": user_message})
 
     # Call LLM
-    llm = get_llm(temperature=0.3)
-    from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
+    llm = get_llm_for_role("chat", ctx)
+    from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
     lc_messages = []
     for m in messages:

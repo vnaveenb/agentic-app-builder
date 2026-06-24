@@ -14,7 +14,21 @@ class HealthResponse(BaseModel):
     redis: str = "connected"
 
 
-class GenerateRequest(BaseModel):
+class LLMSelection(BaseModel):
+    """Optional per-request LLM provider/model override + BYOK identity.
+
+    ``client_id`` is the browser-minted id used to look up saved (encrypted) keys.
+    ``api_key`` is an optional transient key (test-without-saving); saved keys are
+    resolved server-side from client_id + provider.
+    """
+
+    client_id: str | None = Field(default=None, max_length=64)
+    provider: str | None = Field(default=None, max_length=50)
+    model: str | None = Field(default=None, max_length=120)
+    api_key: str | None = Field(default=None, max_length=400)
+
+
+class GenerateRequest(LLMSelection):
     idea: str
     runtime: str = "auto"
     max_iterations: int = Field(default=2, ge=1, le=5)
@@ -33,6 +47,8 @@ class StatusResponse(BaseModel):
     max_iterations: int
     runtime: str
     errors: list[str]
+    provider: str = ""
+    model: str = ""
 
 
 class PreviewStartResponse(BaseModel):
@@ -42,7 +58,7 @@ class PreviewStartResponse(BaseModel):
     mode: str = "server"  # "static" | "server"
 
 
-class IterateRequest(BaseModel):
+class IterateRequest(LLMSelection):
     feedback: str = Field(..., min_length=1, max_length=2000)
 
 
@@ -99,7 +115,7 @@ class SessionListResponse(BaseModel):
 # ── Chat models ───────────────────────────────────────────────────────────────
 
 
-class ChatMessageRequest(BaseModel):
+class ChatMessageRequest(LLMSelection):
     message: str = Field(..., min_length=1, max_length=4000)
 
 
@@ -144,3 +160,33 @@ class MemoryCreateRequest(BaseModel):
     category: str = Field(..., pattern="^(preference|pattern|project_summary)$")
     key: str = Field(..., min_length=1, max_length=200)
     value: str = Field(..., min_length=1, max_length=500)
+
+
+# ── Provider / BYOK models ────────────────────────────────────────────────────
+
+
+class ModelInfo(BaseModel):
+    id: str
+    label: str
+    default: bool = False
+
+
+class ProviderInfo(BaseModel):
+    id: str
+    label: str
+    byok: bool
+    default_model: str = ""
+    models: list[ModelInfo] = Field(default_factory=list)
+    configured: bool = False  # True if this client has a saved key for the provider
+
+
+class ProvidersResponse(BaseModel):
+    providers: list[ProviderInfo]
+    default_provider: str
+    default_model: str
+    encryption_enabled: bool
+
+
+class ProviderKeyRequest(BaseModel):
+    client_id: str = Field(..., min_length=1, max_length=64)
+    api_key: str = Field(..., min_length=1, max_length=400)

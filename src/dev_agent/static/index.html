@@ -3,1281 +3,258 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI Dev Agent — Project 7</title>
-    <!-- Fonts -->
+    <title>AI Dev Agent</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Clash+Display:wght@400;500;600&family=JetBrains+Mono:wght@400;500&family=Outfit:wght@300;400;500;600&display=swap" rel="stylesheet">
-    <style>
-        :root {
-            --bg-base: #09090b;
-            --bg-panel: #18181b;
-            --bg-panel-solid: #18181b;
-            --border-subtle: rgba(255, 255, 255, 0.1);
-            --border-hover: rgba(255, 255, 255, 0.2);
-            
-            --text-primary: #f8fafc;
-            --text-secondary: #94a3b8;
-            --text-muted: #64748b;
-            
-            --accent-cyan: #3b82f6; /* Flat blue instead of cyan */
-            --accent-violet: #6366f1; /* Flat indigo instead of violet */
-            --accent-emerald: #10b981;
-            --accent-rose: #f43f5e;
-            --accent-amber: #f59e0b;
-            
-            --agent-planner: var(--accent-cyan);
-            --agent-developer: var(--accent-emerald);
-            --agent-tester: var(--accent-amber);
-            --agent-reviewer: var(--accent-violet);
-            
-            --font-display: 'Clash Display', sans-serif;
-            --font-ui: 'Outfit', sans-serif;
-            --font-mono: 'JetBrains Mono', monospace;
-            
-            --radius-md: 8px;
-            --radius-lg: 12px;
-        }
-
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-
-        body {
-            font-family: var(--font-ui);
-            background: var(--bg-base);
-            color: var(--text-primary);
-            height: 100vh;
-            overflow: hidden;
-        }
-
-        /* ── Layout ── */
-        .app-layout {
-            display: grid;
-            grid-template-columns: var(--col-left, 320px) 4px var(--col-center, 400px) 4px 1fr;
-            grid-template-rows: 1fr auto;
-            height: 100vh;
-            padding: 12px 12px 0 12px;
-            gap: 8px;
-        }
-
-        .gutter {
-            grid-row: 1;
-            cursor: col-resize;
-            position: relative;
-            z-index: 10;
-            transition: background 0.2s;
-            border-radius: 4px;
-        }
-        .gutter:hover, .gutter.active {
-            background: rgba(255, 255, 255, 0.1);
-        }
-
-        .panel {
-            background: var(--bg-panel);
-            border: 1px solid var(--border-subtle);
-            border-radius: var(--radius-lg);
-            display: flex;
-            flex-direction: column;
-            overflow: hidden;
-        }
-
-        /* ── Left Panel (Controls) ── */
-        .left-panel {
-            grid-row: 1;
-            padding: 24px;
-            gap: 20px;
-            overflow-y: auto;
-        }
-        
-        .left-panel::-webkit-scrollbar { width: 4px; }
-        .left-panel::-webkit-scrollbar-thumb { background: var(--border-subtle); border-radius: 4px; }
-
-        .app-title {
-            font-family: var(--font-display);
-            font-size: 1.5rem;
-            font-weight: 600;
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            letter-spacing: 0.5px;
-            background: linear-gradient(135deg, #fff, #a1a1aa);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-        }
-
-        .input-group {
-            display: flex;
-            flex-direction: column;
-            gap: 8px;
-        }
-        
-        .input-label {
-            font-size: 0.85rem;
-            color: var(--text-secondary);
-            font-weight: 500;
-            letter-spacing: 0.5px;
-            text-transform: uppercase;
-        }
-
-        .idea-input {
-            width: 100%;
-            min-height: 140px;
-            padding: 16px;
-            background: rgba(0, 0, 0, 0.3);
-            border: 1px solid var(--border-subtle);
-            border-radius: var(--radius-md);
-            color: var(--text-primary);
-            font-family: var(--font-ui);
-            font-size: 0.95rem;
-            line-height: 1.5;
-            resize: vertical;
-            transition: all 0.3s ease;
-        }
-        .idea-input:focus {
-            outline: none;
-            border-color: var(--accent-cyan);
-        }
-        .idea-input::placeholder { color: var(--text-muted); }
-
-        .styled-select {
-            appearance: none;
-            width: 100%;
-            padding: 12px 16px;
-            background: rgba(0, 0, 0, 0.3);
-            border: 1px solid var(--border-subtle);
-            border-radius: var(--radius-md);
-            color: var(--text-primary);
-            font-family: var(--font-ui);
-            font-size: 0.95rem;
-            cursor: pointer;
-            transition: border-color 0.3s ease;
-        }
-        .styled-select:focus { outline: none; border-color: var(--accent-violet); }
-        .select-wrapper { position: relative; }
-        .select-wrapper::after {
-            content: '▼';
-            font-size: 0.7rem;
-            position: absolute;
-            right: 16px;
-            top: 50%;
-            transform: translateY(-50%);
-            color: var(--text-secondary);
-            pointer-events: none;
-        }
-
-        .slider-wrapper {
-            display: flex;
-            align-items: center;
-            gap: 16px;
-        }
-        .slider-wrapper input[type="range"] {
-            flex: 1;
-            accent-color: var(--accent-cyan);
-            cursor: pointer;
-        }
-        .slider-value {
-            font-family: var(--font-mono);
-            color: var(--accent-cyan);
-            background: rgba(6, 182, 212, 0.1);
-            padding: 4px 8px;
-            border-radius: 6px;
-            font-size: 0.85rem;
-        }
-
-        .btn-primary {
-            width: 100%;
-            padding: 16px;
-            background: var(--accent-cyan);
-            color: #fff;
-            border: none;
-            border-radius: var(--radius-md);
-            font-family: var(--font-display);
-            font-size: 1.1rem;
-            font-weight: 500;
-            cursor: pointer;
-            transition: background 0.2s, opacity 0.2s;
-            position: relative;
-            overflow: hidden;
-        }
-        .btn-primary:hover {
-            background: #2563eb;
-        }
-        .btn-primary:active { transform: translateY(1px); }
-        .btn-primary:disabled {
-            opacity: 0.5;
-            cursor: not-allowed;
-            transform: none;
-            box-shadow: none;
-        }
-
-        .meta-info {
-            display: flex;
-            flex-direction: column;
-            gap: 8px;
-            margin-top: auto;
-        }
-        
-        .provider-badge {
-            align-self: flex-start;
-            padding: 6px 12px;
-            background: rgba(255, 255, 255, 0.05);
-            border: 1px solid var(--border-subtle);
-            border-radius: 20px;
-            font-size: 0.75rem;
-            color: var(--text-secondary);
-            display: flex;
-            align-items: center;
-            gap: 6px;
-        }
-        .provider-badge::before { content: '⚡'; color: var(--accent-amber); }
-
-        .session-info {
-            display: none;
-            align-items: center;
-            justify-content: space-between;
-            background: rgba(0, 0, 0, 0.3);
-            padding: 8px 12px;
-            border-radius: 8px;
-            border: 1px solid var(--border-subtle);
-        }
-        .session-info.visible { display: flex; }
-        .session-id {
-            font-family: var(--font-mono);
-            font-size: 0.75rem;
-            color: var(--text-secondary);
-            overflow: hidden;
-            text-overflow: ellipsis;
-        }
-        .btn-icon {
-            background: none;
-            border: none;
-            color: var(--text-secondary);
-            cursor: pointer;
-            transition: color 0.2s;
-        }
-        .btn-icon:hover { color: var(--text-primary); }
-
-        /* Iterate */
-        .iterate-section {
-            display: none;
-            margin-top: 16px;
-            padding-top: 24px;
-            border-top: 1px solid var(--border-subtle);
-        }
-        .iterate-section.visible { display: flex; flex-direction: column; gap: 12px; }
-        .btn-secondary {
-            background: rgba(255, 255, 255, 0.05);
-            border: 1px solid var(--border-subtle);
-            color: var(--text-primary);
-            padding: 12px;
-            border-radius: var(--radius-md);
-            font-family: var(--font-ui);
-            font-weight: 500;
-            cursor: pointer;
-            transition: all 0.2s;
-        }
-        .btn-secondary:hover:not(:disabled) {
-            background: rgba(255, 255, 255, 0.1);
-            border-color: var(--border-hover);
-        }
-        .btn-secondary:disabled { opacity: 0.5; cursor: not-allowed; }
-
-        /* ── Center Panel (Pipeline & Logs) ── */
-        .center-panel { grid-row: 1; }
-        
-        .pipeline-header {
-            padding: 20px;
-            border-bottom: 1px solid var(--border-subtle);
-            display: flex;
-            flex-direction: column;
-            gap: 16px;
-            flex-shrink: 0;
-            background: rgba(0,0,0,0.2);
-        }
-        
-        .pipeline-flow {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-        }
-        
-        .agent-node {
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            gap: 8px;
-            position: relative;
-            z-index: 2;
-            cursor: pointer;
-        }
-        
-        .agent-icon {
-            width: 40px;
-            height: 40px;
-            border-radius: 12px;
-            background: var(--bg-panel-solid);
-            border: 1px solid var(--border-subtle);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 1.2rem;
-            transition: all 0.3s ease;
-        }
-        
-        .agent-node[data-agent="planner"] .agent-icon { color: var(--agent-planner); }
-        .agent-node[data-agent="developer"] .agent-icon { color: var(--agent-developer); }
-        .agent-node[data-agent="tester"] .agent-icon { color: var(--agent-tester); }
-        .agent-node[data-agent="reviewer"] .agent-icon { color: var(--agent-reviewer); }
-
-        .agent-node.running .agent-icon {
-            border-color: currentColor;
-            animation: pulse-glow 2s ease-in-out infinite;
-        }
-        
-        .agent-node.done .agent-icon {
-            background: currentColor;
-            color: #000;
-        }
-        
-        .agent-label {
-            font-size: 0.75rem;
-            font-weight: 500;
-            color: var(--text-secondary);
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-            transition: color 0.3s ease;
-        }
-        .agent-node.running .agent-label { color: var(--text-primary); }
-        .agent-node.done .agent-label { color: var(--text-primary); }
-
-        .flow-connector {
-            flex: 1;
-            height: 2px;
-            background: var(--border-subtle);
-            margin: 0 10px;
-            margin-bottom: 20px;
-            position: relative;
-            z-index: 1;
-        }
-
-        @keyframes pulse-glow {
-            0%, 100% { box-shadow: 0 0 6px 0px currentColor; }
-            50% { box-shadow: 0 0 18px 4px currentColor; }
-        }
-
-        .stream-indicator {
-            display: inline-block;
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
-            animation: stream-pulse 1.2s ease-in-out infinite;
-        }
-        @keyframes stream-pulse {
-            0%, 100% { opacity: 1; transform: scale(1); }
-            50% { opacity: 0.4; transform: scale(0.7); }
-        }
-
-        .log-container {
-            flex: 1;
-            display: flex;
-            flex-direction: column;
-            overflow: hidden;
-            position: relative;
-        }
-
-        .event-log {
-            flex: 1;
-            overflow-y: auto;
-            padding: 20px;
-            font-family: var(--font-ui);
-            font-size: 0.9rem;
-            display: flex;
-            flex-direction: column;
-            gap: 16px;
-        }
-        .event-log::-webkit-scrollbar { width: 4px; }
-        .event-log::-webkit-scrollbar-thumb { background: var(--border-subtle); }
-
-        .log-entry {
-            background: rgba(255, 255, 255, 0.03);
-            border: 1px solid var(--border-subtle);
-            border-radius: 8px;
-            padding: 12px;
-            animation: fade-in 0.3s ease-out;
-        }
-        @keyframes fade-in { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
-
-        .log-header {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            margin-bottom: 8px;
-        }
-        .agent-tag {
-            font-size: 0.7rem;
-            font-weight: 600;
-            padding: 3px 8px;
-            border-radius: 4px;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-            color: #000;
-        }
-        .agent-tag.planner { background: var(--agent-planner); }
-        .agent-tag.developer { background: var(--agent-developer); }
-        .agent-tag.tester { background: var(--agent-tester); }
-        .agent-tag.reviewer { background: var(--agent-reviewer); }
-        .agent-tag.system { background: var(--text-secondary); }
-
-        .log-content { color: var(--text-secondary); line-height: 1.5; }
-        .log-content strong { color: var(--text-primary); }
-        .log-content ul { margin: 8px 0 8px 20px; }
-        .log-content li { margin-bottom: 4px; }
-        .pass-text { color: var(--agent-developer); }
-        .fail-text { color: var(--accent-rose); }
-
-        /* Thinking Details */
-        .thinking-details {
-            margin: 10px 0;
-            background: rgba(0, 0, 0, 0.2);
-            border: 1px solid var(--border-subtle);
-            border-radius: var(--radius-md);
-            overflow: hidden;
-        }
-        .thinking-summary {
-            padding: 10px 14px;
-            font-size: 0.85rem;
-            font-weight: 500;
-            color: var(--text-secondary);
-            cursor: pointer;
-            user-select: none;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            background: rgba(255, 255, 255, 0.02);
-            transition: background 0.2s;
-        }
-        .thinking-summary:hover {
-            background: rgba(255, 255, 255, 0.05);
-            color: var(--text-primary);
-        }
-        .thinking-summary::marker {
-            display: none;
-        }
-        .thinking-summary::-webkit-details-marker {
-            display: none;
-        }
-        .thinking-content {
-            padding: 14px;
-            font-family: var(--font-mono);
-            font-size: 0.8rem;
-            color: var(--text-secondary);
-            white-space: pre-wrap;
-            word-break: break-word;
-            border-top: 1px solid var(--border-subtle);
-            background: rgba(0,0,0,0.4);
-            max-height: 400px;
-            overflow-y: auto;
-        }
-        
-        .history-section {
-            display: none;
-            flex-direction: column;
-            gap: 8px;
-            margin-top: 16px;
-            padding-top: 16px;
-            border-top: 1px solid var(--border-subtle);
-        }
-        .history-section.visible { display: flex; }
-        .history-list {
-            display: flex;
-            flex-direction: column;
-            gap: 4px;
-        }
-        .history-item {
-            padding: 8px 12px;
-            background: rgba(0,0,0,0.2);
-            border: 1px solid var(--border-subtle);
-            border-radius: 6px;
-            font-size: 0.85rem;
-            cursor: pointer;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            transition: all 0.2s;
-        }
-        .history-item:hover {
-            background: rgba(0,0,0,0.3);
-            border-color: var(--border-hover);
-        }
-        .history-item.active {
-            background: rgba(59, 130, 246, 0.1);
-            border-color: var(--accent-cyan);
-            color: var(--text-primary);
-        }
-
-        /* ── Right Panel (Workspace) ── */
-        .right-panel { grid-row: 1; }
-        
-        .workspace-tabs {
-            display: flex;
-            background: rgba(0,0,0,0.2);
-            border-bottom: 1px solid var(--border-subtle);
-            padding: 0 8px;
-        }
-        .tab-btn {
-            background: none;
-            border: none;
-            padding: 16px 20px;
-            color: var(--text-secondary);
-            font-family: var(--font-ui);
-            font-size: 0.9rem;
-            font-weight: 500;
-            cursor: pointer;
-            position: relative;
-            transition: color 0.2s;
-        }
-        .tab-btn:hover { color: var(--text-primary); }
-        .tab-btn.active { color: var(--text-primary); }
-        .tab-btn.active::after {
-            content: '';
-            position: absolute;
-            bottom: -1px;
-            left: 0;
-            right: 0;
-            height: 2px;
-            background: var(--accent-cyan);
-            box-shadow: 0 -2px 10px rgba(6, 182, 212, 0.4);
-        }
-
-        .tab-content {
-            display: none;
-            flex: 1;
-            overflow: hidden;
-            flex-direction: column;
-        }
-        .tab-content.active { display: flex; }
-
-        /* Code Editor */
-        .file-tabs {
-            display: flex;
-            overflow-x: auto;
-            background: rgba(0,0,0,0.1);
-            border-bottom: 1px solid var(--border-subtle);
-            padding: 8px 8px 0 8px;
-            gap: 4px;
-        }
-        .file-tabs::-webkit-scrollbar { height: 2px; }
-        .file-tabs::-webkit-scrollbar-thumb { background: var(--border-subtle); }
-        
-        .file-tab {
-            padding: 8px 16px;
-            background: rgba(255,255,255,0.02);
-            border: 1px solid transparent;
-            border-bottom: none;
-            border-radius: 8px 8px 0 0;
-            color: var(--text-secondary);
-            font-family: var(--font-mono);
-            font-size: 0.8rem;
-            cursor: pointer;
-            white-space: nowrap;
-            transition: all 0.2s;
-        }
-        .file-tab:hover { background: rgba(255,255,255,0.05); color: var(--text-primary); }
-        .file-tab.active {
-            background: var(--bg-panel-solid);
-            border-color: var(--border-subtle);
-            color: var(--text-primary);
-        }
-        .file-tab.unsaved::before {
-            content: '●';
-            color: var(--accent-amber);
-            margin-right: 6px;
-            font-size: 0.7rem;
-        }
-
-        .editor-toolbar {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            padding: 8px 16px;
-            background: var(--bg-panel-solid);
-            border-bottom: 1px solid var(--border-subtle);
-            font-size: 0.8rem;
-        }
-        .save-hint { color: var(--text-muted); }
-        .save-status { color: var(--accent-emerald); opacity: 0; transition: opacity 0.3s; }
-        .save-status.visible { opacity: 1; }
-
-        #monacoContainer { flex: 1; min-height: 0; }
-        .placeholder-view {
-            flex: 1;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: var(--text-muted);
-            font-family: var(--font-mono);
-            font-size: 0.9rem;
-            background: var(--bg-panel-solid);
-        }
-
-        /* Preview */
-        .preview-toolbar {
-            display: flex;
-            gap: 12px;
-            padding: 12px;
-            background: rgba(0,0,0,0.2);
-            border-bottom: 1px solid var(--border-subtle);
-        }
-        .btn-preview {
-            padding: 8px 16px;
-            border-radius: 6px;
-            font-family: var(--font-ui);
-            font-size: 0.85rem;
-            font-weight: 500;
-            cursor: pointer;
-            border: 1px solid var(--border-subtle);
-            background: rgba(255,255,255,0.05);
-            color: var(--text-primary);
-            transition: all 0.2s;
-        }
-        .btn-preview:hover:not(:disabled) { background: rgba(255,255,255,0.1); border-color: var(--border-hover); }
-        .btn-preview:disabled { opacity: 0.4; cursor: not-allowed; }
-        .btn-preview.play { color: var(--accent-emerald); border-color: rgba(16, 185, 129, 0.3); }
-        .btn-preview.play:hover:not(:disabled) { background: rgba(16, 185, 129, 0.1); border-color: var(--accent-emerald); }
-        .btn-preview.stop { color: var(--accent-rose); border-color: rgba(244, 63, 94, 0.3); }
-        .btn-preview.stop:hover:not(:disabled) { background: rgba(244, 63, 94, 0.1); border-color: var(--accent-rose); }
-
-        .preview-frame-container { flex: 1; position: relative; background: #fff; }
-        .preview-frame { width: 100%; height: 100%; border: none; }
-        .preview-overlay {
-            position: absolute; inset: 0;
-            background: var(--bg-panel-solid);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: var(--text-muted);
-            font-family: var(--font-mono);
-            font-size: 0.9rem;
-            z-index: 5;
-            transition: opacity 0.3s;
-        }
-        .preview-overlay.hidden { opacity: 0; pointer-events: none; }
-
-        /* Terminal */
-        .terminal-panel { background: #000; flex: 1; display: flex; flex-direction: column; }
-        .terminal-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding: 8px 16px;
-            background: #111;
-            border-bottom: 1px solid #333;
-        }
-        .terminal-title { font-family: var(--font-mono); font-size: 0.8rem; color: #888; }
-        .terminal-output {
-            flex: 1;
-            overflow-y: auto;
-            padding: 16px;
-            font-family: var(--font-mono);
-            font-size: 0.85rem;
-            line-height: 1.6;
-            color: #ccc;
-        }
-        .terminal-output::-webkit-scrollbar { width: 4px; }
-        .terminal-output::-webkit-scrollbar-thumb { background: #333; }
-        
-        .term-src { color: var(--accent-cyan); margin-right: 8px; }
-        .term-src.tester { color: var(--accent-amber); }
-        .term-src.preview { color: var(--accent-emerald); }
-        .term-src.console { color: var(--accent-rose); }
-
-        /* ── Bottom Bar ── */
-        .bottom-bar {
-            grid-column: 1 / -1;
-            padding: 12px 16px 16px 16px;
-            display: flex;
-            align-items: center;
-            gap: 20px;
-        }
-        
-        .progress-track {
-            flex: 1;
-            height: 4px;
-            background: var(--bg-panel);
-            border-radius: 2px;
-            overflow: hidden;
-            border: 1px solid var(--border-subtle);
-        }
-        .progress-fill {
-            height: 100%;
-            background: var(--accent-cyan);
-            width: 0%;
-            transition: width 0.6s cubic-bezier(0.16, 1, 0.3, 1);
-        }
-        
-        .btn-download {
-            padding: 8px 20px;
-            background: rgba(255,255,255,0.1);
-            color: #fff;
-            border: 1px solid var(--border-hover);
-            border-radius: 20px;
-            font-family: var(--font-ui);
-            font-size: 0.85rem;
-            font-weight: 500;
-            cursor: pointer;
-            transition: all 0.2s;
-            opacity: 0.5;
-            pointer-events: none;
-        }
-        .btn-download.enabled {
-            opacity: 1;
-            pointer-events: auto;
-            background: rgba(16, 185, 129, 0.15);
-            border-color: var(--accent-emerald);
-            color: var(--accent-emerald);
-        }
-        .btn-download.enabled:hover {
-            background: var(--accent-emerald);
-            color: #000;
-            box-shadow: 0 0 15px rgba(16, 185, 129, 0.4);
-        }
-
-        /* ── Left Panel Tabs ── */
-        .left-tabs {
-            display: flex;
-            gap: 2px;
-            background: rgba(0,0,0,0.3);
-            border-radius: var(--radius-md);
-            padding: 3px;
-            margin-bottom: 16px;
-        }
-        .left-tab-btn {
-            flex: 1;
-            padding: 8px 12px;
-            border: none;
-            border-radius: 6px;
-            background: transparent;
-            color: var(--text-secondary);
-            font-family: var(--font-ui);
-            font-size: 0.8rem;
-            font-weight: 500;
-            cursor: pointer;
-            transition: all 0.2s;
-        }
-        .left-tab-btn.active {
-            background: rgba(255,255,255,0.1);
-            color: var(--text-primary);
-        }
-        .left-tab-btn:hover:not(.active) { color: var(--text-primary); }
-        .left-tab-content { display: none; flex-direction: column; gap: 16px; }
-        .left-tab-content.active { display: flex; }
-
-        /* ── Advanced Toggle ── */
-        .advanced-toggle {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            padding: 8px 0;
-            color: var(--text-muted);
-            font-size: 0.8rem;
-            cursor: pointer;
-            user-select: none;
-            transition: color 0.2s;
-        }
-        .advanced-toggle:hover { color: var(--text-secondary); }
-        .advanced-toggle .chevron {
-            transition: transform 0.2s;
-            font-size: 0.65rem;
-        }
-        .advanced-toggle.open .chevron { transform: rotate(90deg); }
-        .advanced-content {
-            display: none;
-            flex-direction: column;
-            gap: 12px;
-            padding-left: 4px;
-            border-left: 2px solid var(--border-subtle);
-            margin-left: 4px;
-        }
-        .advanced-content.open { display: flex; }
-
-        /* ── Chat UI ── */
-        .chat-messages {
-            flex: 1;
-            overflow-y: auto;
-            display: flex;
-            flex-direction: column;
-            gap: 10px;
-            padding: 4px 0;
-            min-height: 100px;
-            max-height: 300px;
-        }
-        .chat-messages::-webkit-scrollbar { width: 3px; }
-        .chat-messages::-webkit-scrollbar-thumb { background: var(--border-subtle); border-radius: 3px; }
-        .chat-bubble {
-            max-width: 85%;
-            padding: 10px 14px;
-            border-radius: 12px;
-            font-size: 0.85rem;
-            line-height: 1.5;
-            animation: fade-in 0.2s ease-out;
-        }
-        .chat-bubble.user {
-            align-self: flex-end;
-            background: var(--accent-cyan);
-            color: #fff;
-            border-bottom-right-radius: 4px;
-        }
-        .chat-bubble.assistant {
-            align-self: flex-start;
-            background: rgba(255,255,255,0.08);
-            color: var(--text-primary);
-            border-bottom-left-radius: 4px;
-        }
-        .chat-input-row {
-            display: flex;
-            gap: 8px;
-            margin-top: 8px;
-        }
-        .chat-input {
-            flex: 1;
-            padding: 10px 14px;
-            background: rgba(0,0,0,0.3);
-            border: 1px solid var(--border-subtle);
-            border-radius: 20px;
-            color: var(--text-primary);
-            font-family: var(--font-ui);
-            font-size: 0.85rem;
-            outline: none;
-            transition: border-color 0.2s;
-        }
-        .chat-input:focus { border-color: var(--accent-cyan); }
-        .chat-send-btn {
-            width: 36px;
-            height: 36px;
-            border-radius: 50%;
-            border: none;
-            background: var(--accent-cyan);
-            color: #fff;
-            cursor: pointer;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            transition: background 0.2s;
-        }
-        .chat-send-btn:hover { background: #2563eb; }
-        .chat-send-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-
-        /* ── Memory Section ── */
-        .memory-section {
-            border-top: 1px solid var(--border-subtle);
-            padding-top: 12px;
-            margin-top: auto;
-        }
-        .memory-header {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            margin-bottom: 8px;
-        }
-        .memory-cards {
-            display: flex;
-            flex-direction: column;
-            gap: 6px;
-            max-height: 120px;
-            overflow-y: auto;
-        }
-        .memory-cards::-webkit-scrollbar { width: 3px; }
-        .memory-cards::-webkit-scrollbar-thumb { background: var(--border-subtle); }
-        .memory-card {
-            padding: 8px 10px;
-            background: rgba(99, 102, 241, 0.08);
-            border: 1px solid rgba(99, 102, 241, 0.2);
-            border-radius: 6px;
-            font-size: 0.78rem;
-            color: var(--text-secondary);
-            line-height: 1.4;
-        }
-        .memory-card .memory-key {
-            color: var(--accent-violet);
-            font-weight: 500;
-            margin-right: 6px;
-        }
-
-        /* ── Version Timeline ── */
-        .version-timeline {
-            border-top: 1px solid var(--border-subtle);
-            padding-top: 12px;
-        }
-        .timeline-track {
-            display: flex;
-            align-items: center;
-            gap: 0;
-            padding: 8px 0;
-            overflow-x: auto;
-        }
-        .timeline-track::-webkit-scrollbar { height: 0; }
-        .timeline-dot {
-            width: 12px;
-            height: 12px;
-            border-radius: 50%;
-            background: var(--border-subtle);
-            border: 2px solid var(--border-subtle);
-            cursor: pointer;
-            transition: all 0.2s;
-            flex-shrink: 0;
-            position: relative;
-        }
-        .timeline-dot:hover { border-color: var(--accent-cyan); transform: scale(1.3); }
-        .timeline-dot.active {
-            background: var(--accent-cyan);
-            border-color: var(--accent-cyan);
-            box-shadow: 0 0 8px rgba(59, 130, 246, 0.4);
-        }
-        .timeline-dot[title]:hover::after {
-            content: attr(title);
-            position: absolute;
-            bottom: 18px;
-            left: 50%;
-            transform: translateX(-50%);
-            background: var(--bg-panel);
-            border: 1px solid var(--border-subtle);
-            padding: 4px 8px;
-            border-radius: 4px;
-            font-size: 0.7rem;
-            white-space: nowrap;
-            color: var(--text-primary);
-            z-index: 10;
-        }
-        .timeline-line {
-            flex: 1;
-            height: 2px;
-            min-width: 12px;
-            background: var(--border-subtle);
-        }
-        .timeline-line.filled { background: var(--accent-cyan); }
-
-        /* ── Enlarged Pipeline Nodes ── */
-        .pipeline-flow {
-            display: flex;
-            align-items: flex-start;
-            justify-content: space-between;
-        }
-        .agent-node .agent-icon {
-            width: 52px;
-            height: 52px;
-            border-radius: 14px;
-        }
-        .agent-node .agent-icon svg { width: 24px; height: 24px; }
-
-        /* ── Task Checklist (below each node) ── */
-        .agent-tasks {
-            display: flex;
-            flex-direction: column;
-            gap: 4px;
-            margin-top: 8px;
-            min-width: 120px;
-        }
-        .task-item {
-            display: flex;
-            align-items: center;
-            gap: 6px;
-            font-size: 0.72rem;
-            color: var(--text-muted);
-            transition: color 0.3s;
-            white-space: nowrap;
-        }
-        .task-item.done { color: var(--text-secondary); }
-        .task-item .task-check {
-            width: 14px;
-            height: 14px;
-            border-radius: 4px;
-            border: 1.5px solid var(--border-subtle);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            flex-shrink: 0;
-            transition: all 0.3s;
-        }
-        .task-item.done .task-check {
-            background: var(--accent-emerald);
-            border-color: var(--accent-emerald);
-        }
-        .task-item.done .task-check::after {
-            content: '✓';
-            color: #000;
-            font-size: 0.6rem;
-            font-weight: bold;
-        }
-        .task-item.active { color: var(--text-primary); }
-        .task-item.active .task-check {
-            border-color: currentColor;
-            animation: pulse-glow 2s ease-in-out infinite;
-        }
-
-        /* ── Bottom Bar Agent Status ── */
-        .agent-status-row {
-            display: flex;
-            align-items: center;
-            gap: 16px;
-            flex: 1;
-        }
-        .agent-status-item {
-            display: flex;
-            align-items: center;
-            gap: 6px;
-            font-size: 0.8rem;
-            font-weight: 500;
-            color: var(--text-muted);
-            cursor: pointer;
-            transition: color 0.2s;
-        }
-        .agent-status-item:hover { color: var(--text-secondary); }
-        .agent-status-item .status-icon {
-            width: 18px;
-            height: 18px;
-            border-radius: 50%;
-            border: 2px solid var(--border-subtle);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 0.6rem;
-            transition: all 0.3s;
-        }
-        .agent-status-item.running .status-icon {
-            border-color: currentColor;
-            animation: pulse-glow 1.5s ease-in-out infinite;
-        }
-        .agent-status-item.done .status-icon {
-            background: var(--accent-emerald);
-            border-color: var(--accent-emerald);
-            color: #000;
-        }
-        .agent-status-item.done .status-icon::after { content: '✓'; font-weight: bold; }
-        .agent-status-item[data-agent="planner"] { color: var(--agent-planner); }
-        .agent-status-item[data-agent="developer"] { color: var(--agent-developer); }
-        .agent-status-item[data-agent="tester"] { color: var(--agent-tester); }
-        .agent-status-item[data-agent="reviewer"] { color: var(--agent-reviewer); }
-
-    </style>
-    <!-- Redesign layer (overrides tokens + adds new component styles/states) -->
-    <link rel="stylesheet" href="/static/css/theme.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/css/tokens.css">
+    <link rel="stylesheet" href="/static/css/reset.css">
+    <link rel="stylesheet" href="/static/css/layout.css">
+    <link rel="stylesheet" href="/static/css/components.css">
+    <link rel="stylesheet" href="/static/css/phases.css">
+    <link rel="stylesheet" href="/static/css/agents.css">
+    <link rel="stylesheet" href="/static/css/editor.css">
 </head>
 <body>
-    <div class="app-layout" id="appLayout">
-        
-        <!-- LEFT PANEL -->
-        <div class="panel left-panel" id="leftPanel">
-            <div class="app-title">
-                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 2 7 12 12 22 7 12 2"></polygon><polyline points="2 17 12 22 22 17"></polyline><polyline points="2 12 12 17 22 12"></polyline></svg>
-                Dev Agent
+    <div class="app-shell" id="appShell">
+
+        <!-- SIDEBAR -->
+        <aside class="sidebar" id="sidebar">
+            <div class="sidebar-header">
+                <div class="brand">
+                    <svg class="brand-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg>
+                    <span class="brand-name">Dev Agent</span>
+                </div>
+                <button class="sidebar-toggle" id="sidebarToggle" title="Collapse sidebar">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>
+                </button>
             </div>
 
-            <!-- Tab Switcher -->
-            <div class="left-tabs">
-                <button class="left-tab-btn active" data-left-target="buildTab">New Build</button>
-                <button class="left-tab-btn" data-left-target="chatTab">Chat</button>
-            </div>
-
-            <!-- NEW BUILD TAB -->
-            <div class="left-tab-content active" id="buildTab">
-                <div class="input-group">
-                    <label class="input-label">Project Vision</label>
-                    <textarea class="idea-input" id="ideaInput" placeholder="Describe your application idea...&#10;&#10;e.g., A minimalist pomodoro timer with a neon dark theme using React."></textarea>
-                </div>
-
-                <button class="btn-primary" id="generateBtn">Initialize Build</button>
-
-                <!-- Advanced Settings (collapsed) -->
-                <div class="advanced-toggle" id="advancedToggle">
-                    <span class="chevron">▶</span> Advanced Settings
-                </div>
-                <div class="advanced-content" id="advancedContent">
-                    <div class="input-group">
-                        <label class="input-label">Runtime Environment</label>
-                        <div class="select-wrapper">
-                            <select class="styled-select" id="runtimeSelect">
-                                <option value="auto">Auto-detect from prompt</option>
-                                <option value="python">Python (FastAPI/Flask)</option>
-                                <option value="node">Node.js (Express)</option>
-                                <option value="react">React (CDN)</option>
-                                <option value="angular">Angular (CDN)</option>
-                                <option value="static">Static HTML/JS</option>
-                            </select>
-                        </div>
-                    </div>
-                    <div class="input-group">
-                        <label class="input-label">Auto-Iterations</label>
-                        <div class="slider-wrapper">
-                            <input type="range" id="iterSlider" min="1" max="5" value="2">
-                            <span class="slider-value" id="iterValue">2</span>
-                        </div>
-                    </div>
-                    <div class="input-group">
-                        <label class="input-label">Orchestration Backend</label>
-                        <div class="select-wrapper">
-                            <select class="styled-select" id="backendSelect">
-                                <option value="langgraph">LangGraph (State Machine)</option>
-                                <option value="crewai">CrewAI (Role-Based)</option>
-                            </select>
-                        </div>
-                    </div>
-                </div>
-
-                <div class="iterate-section" id="iterateSection">
-                    <label class="input-label">Feedback Loop</label>
-                    <textarea class="idea-input" id="iterateInput" style="min-height: 80px;" placeholder="What should be changed?"></textarea>
-                    <button class="btn-secondary" id="iterateBtn">Apply Iteration</button>
-                </div>
-            </div>
-
-            <!-- CHAT TAB -->
-            <div class="left-tab-content" id="chatTab">
-                <div class="chat-messages" id="chatMessages">
-                    <div class="chat-bubble assistant">Hi! I'm your dev assistant. Ask me anything about your project or request changes.</div>
-                </div>
-                <div class="chat-input-row">
-                    <input class="chat-input" id="chatInput" placeholder="Ask or request changes..." autocomplete="off">
-                    <button class="chat-send-btn" id="chatSendBtn" title="Send">
-                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
-                    </button>
-                </div>
-            </div>
-
-            <!-- Memory Section -->
-            <div class="memory-section" id="memorySection" style="display:none;">
-                <div class="memory-header">
-                    <span class="input-label">🧠 Memory</span>
-                </div>
-                <div class="memory-cards" id="memoryCards"></div>
-            </div>
-
-            <!-- Version Timeline -->
-            <div class="version-timeline" id="versionTimeline" style="display:none;">
-                <span class="input-label">Version History</span>
-                <div class="timeline-track" id="timelineTrack"></div>
-            </div>
-
-            <div class="meta-info">
-                <div class="provider-badge" id="providerBadge">Connecting...</div>
-                <div class="session-info" id="sessionInfo">
-                    <span class="session-id" id="sessionId"></span>
-                    <button class="btn-icon" id="copySession" title="Copy ID">
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                    </button>
-                </div>
-            </div>
-        </div>
-
-        <div class="gutter" id="gutterLeft"></div>
-
-        <!-- CENTER PANEL -->
-        <div class="panel center-panel" id="centerPanel">
-            <div class="pipeline-header">
-                <div class="input-label">Pipeline Status</div>
-                <div class="pipeline-flow">
-                    <div class="agent-node" data-agent="planner" id="node-planner">
-                        <div class="agent-icon"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 11 12 14 22 4"></polyline><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path></svg></div>
-                        <div class="agent-label">Plan</div>
-                        <div class="agent-tasks" id="tasks-planner"></div>
-                    </div>
-                    <div class="flow-connector"></div>
-                    <div class="agent-node" data-agent="developer" id="node-developer">
-                        <div class="agent-icon"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 18 22 12 16 6"></polyline><polyline points="8 6 2 12 8 18"></polyline></svg></div>
-                        <div class="agent-label">Build</div>
-                        <div class="agent-tasks" id="tasks-developer"></div>
-                    </div>
-                    <div class="flow-connector"></div>
-                    <div class="agent-node" data-agent="tester" id="node-tester">
-                        <div class="agent-icon"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg></div>
-                        <div class="agent-label">Test</div>
-                        <div class="agent-tasks" id="tasks-tester"></div>
-                    </div>
-                    <div class="flow-connector"></div>
-                    <div class="agent-node" data-agent="reviewer" id="node-reviewer">
-                        <div class="agent-icon"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg></div>
-                        <div class="agent-label">Review</div>
-                        <div class="agent-tasks" id="tasks-reviewer"></div>
-                    </div>
-                </div>
-            </div>
-            
-            <div class="log-container">
-                <div class="event-log" id="eventLog"></div>
-            </div>
-        </div>
-
-        <div class="gutter" id="gutterRight"></div>
-
-        <!-- RIGHT PANEL -->
-        <div class="panel right-panel" id="rightPanel">
-            <div class="workspace-tabs">
-                <button class="tab-btn active" data-target="codeContent">Code</button>
-                <button class="tab-btn" data-target="previewContent">Preview</button>
-                <button class="tab-btn" data-target="terminalContent">Logs</button>
-            </div>
-
-            <!-- Code Tab -->
-            <div class="tab-content active" id="codeContent">
-                <div class="file-tabs" id="fileTabs"></div>
-                <div class="editor-toolbar">
-                    <span class="save-hint">Ctrl+S to save & hot-reload</span>
-                    <span class="save-status" id="saveStatus">✓ Saved</span>
-                </div>
-                <div id="monacoContainer" style="display:none;"></div>
-                <div class="placeholder-view" id="codePlaceholder">Workspace empty. Initialize build to generate code.</div>
-            </div>
-
-            <!-- Preview Tab -->
-            <div class="tab-content" id="previewContent">
-                <div class="preview-toolbar">
-                    <button class="btn-preview play" id="launchPreviewBtn" disabled>▶ Start Server</button>
-                    <button class="btn-preview stop" id="stopPreviewBtn" disabled>■ Stop</button>
-                    <button class="btn-preview" id="refreshPreviewBtn" disabled>↻ Reload</button>
-                </div>
-                <div class="preview-frame-container">
-                    <div class="preview-overlay" id="previewOverlay">Preview inactive</div>
-                    <div class="preview-banner" id="previewBanner"></div>
-                    <iframe class="preview-frame" id="previewFrame" sandbox="allow-scripts allow-forms allow-same-origin" style="display:none;"></iframe>
-                </div>
-            </div>
-
-            <!-- Terminal Tab -->
-            <div class="tab-content" id="terminalContent">
-                <div class="terminal-panel">
-                    <div class="terminal-header">
-                        <span class="terminal-title">STDOUT / STDERR</span>
-                        <button class="btn-icon" id="terminalClearBtn" title="Clear">
-                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+            <div class="sidebar-content">
+                <!-- Sessions -->
+                <div class="sidebar-section">
+                    <div class="section-header">
+                        <span class="section-title">Sessions</span>
+                        <button class="btn-icon-sm" id="newSessionBtn" title="New session">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
                         </button>
                     </div>
-                    <div class="terminal-output" id="terminalOutput"></div>
+                    <div class="session-list" id="sessionList">
+                        <div class="session-empty">No sessions yet</div>
+                    </div>
                 </div>
-            </div>
-        </div>
 
-        <!-- BOTTOM BAR -->
-        <div class="bottom-bar">
-            <div class="agent-status-row" id="agentStatusRow">
-                <div class="agent-status-item" data-agent="planner" id="status-planner">
-                    <span class="status-icon"></span> Plan
+                <!-- Configuration -->
+                <div class="sidebar-section">
+                    <div class="section-header">
+                        <span class="section-title">Configuration</span>
+                    </div>
+                    <div class="config-group">
+                        <label class="config-label">Provider</label>
+                        <select class="config-select" id="providerSelect"></select>
+                    </div>
+                    <div class="config-group">
+                        <label class="config-label">Model</label>
+                        <select class="config-select" id="modelSelect"></select>
+                    </div>
+                    <button class="btn-text" id="manageKeysBtn">Manage API Keys</button>
                 </div>
-                <div class="agent-status-item" data-agent="developer" id="status-developer">
-                    <span class="status-icon"></span> Build
-                </div>
-                <div class="agent-status-item" data-agent="tester" id="status-tester">
-                    <span class="status-icon"></span> Test
-                </div>
-                <div class="agent-status-item" data-agent="reviewer" id="status-reviewer">
-                    <span class="status-icon"></span> Review
+
+                <!-- Memories -->
+                <div class="sidebar-section" id="memorySection" style="display:none;">
+                    <div class="section-header">
+                        <span class="section-title">Memories</span>
+                        <span class="badge" id="memoryCount">0</span>
+                    </div>
+                    <div class="memory-list" id="memoryList"></div>
                 </div>
             </div>
-            <span class="build-timer" id="buildTimer">⏱ 0.0s</span>
-            <button class="btn-download" id="downloadBtn">Export .ZIP</button>
-        </div>
+
+            <div class="sidebar-footer">
+                <div class="provider-badge" id="providerBadge">Connecting...</div>
+            </div>
+        </aside>
+
+        <!-- MAIN AREA -->
+        <main class="main-area" id="mainArea">
+
+            <!-- Status Bar (top) -->
+            <div class="status-bar" id="statusBar">
+                <div class="progress-stepper" id="progressStepper">
+                    <div class="step" data-agent="planner">
+                        <span class="step-dot"></span>
+                        <span class="step-label">Plan</span>
+                        <span class="step-timer" id="timer-planner"></span>
+                    </div>
+                    <div class="step-line" data-after="planner"></div>
+                    <div class="step" data-agent="developer">
+                        <span class="step-dot"></span>
+                        <span class="step-label">Develop</span>
+                        <span class="step-timer" id="timer-developer"></span>
+                    </div>
+                    <div class="step-line" data-after="developer"></div>
+                    <div class="step" data-agent="designer">
+                        <span class="step-dot"></span>
+                        <span class="step-label">Design</span>
+                        <span class="step-timer" id="timer-designer"></span>
+                    </div>
+                    <div class="step-line" data-after="designer"></div>
+                    <div class="step" data-agent="tester">
+                        <span class="step-dot"></span>
+                        <span class="step-label">Test</span>
+                        <span class="step-timer" id="timer-tester"></span>
+                    </div>
+                    <div class="step-line" data-after="tester"></div>
+                    <div class="step" data-agent="reviewer">
+                        <span class="step-dot"></span>
+                        <span class="step-label">Review</span>
+                        <span class="step-timer" id="timer-reviewer"></span>
+                    </div>
+                </div>
+                <div class="status-meta">
+                    <span class="build-timer" id="buildTimer"></span>
+                    <span class="iteration-badge" id="iterationBadge"></span>
+                </div>
+            </div>
+
+            <!-- Phase Container (switches content per phase) -->
+            <div class="phase-container" id="phaseContainer">
+
+                <!-- PHASE: Ideation -->
+                <section class="phase phase-ideation active" id="phaseIdeation">
+                    <div class="ideation-center">
+                        <h1 class="ideation-title">What would you like to build?</h1>
+                        <p class="ideation-subtitle">Describe your app idea and we'll plan, build, style, test, and review it.</p>
+
+                        <div class="prompt-box">
+                            <textarea class="prompt-input" id="ideaInput" placeholder="A pomodoro timer with dark neon theme, session tracking, and notification sounds..." rows="4"></textarea>
+                            <div class="prompt-controls">
+                                <div class="prompt-options">
+                                    <select class="option-select" id="runtimeSelect">
+                                        <option value="auto">Auto-detect runtime</option>
+                                        <option value="react">React</option>
+                                        <option value="python">Python (Flask)</option>
+                                        <option value="node">Node.js</option>
+                                        <option value="angular">Angular</option>
+                                        <option value="static">Static HTML</option>
+                                    </select>
+                                    <select class="option-select" id="backendSelect">
+                                        <option value="langgraph">LangGraph</option>
+                                        <option value="crewai">CrewAI</option>
+                                    </select>
+                                    <div class="iter-control">
+                                        <label class="iter-label">Iterations</label>
+                                        <input type="range" class="iter-slider" id="iterSlider" min="1" max="5" value="2">
+                                        <span class="iter-value" id="iterValue">2</span>
+                                    </div>
+                                </div>
+                                <button class="btn-generate" id="generateBtn">
+                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                                    Generate Plan
+                                </button>
+                            </div>
+                        </div>
+
+                        <div class="templates">
+                            <span class="templates-label">Try these</span>
+                            <button class="template-chip" data-idea="A todo app with categories, dark theme, and local storage">Todo app</button>
+                            <button class="template-chip" data-idea="A pomodoro timer with session history, break reminders, and a neon dark UI">Pomodoro timer</button>
+                            <button class="template-chip" data-idea="A weather dashboard that shows 5-day forecast with animated icons and a clean minimal design">Weather dashboard</button>
+                            <button class="template-chip" data-idea="A markdown editor with live preview, syntax highlighting, and export to HTML">Markdown editor</button>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- PHASE: Planning -->
+                <section class="phase phase-planning" id="phasePlanning">
+                    <div class="stream-area" id="planningStream">
+                        <!-- Agent thinking blocks and plan card rendered here by JS -->
+                    </div>
+                </section>
+
+                <!-- PHASE: Building -->
+                <section class="phase phase-building" id="phaseBuilding">
+                    <div class="build-layout">
+                        <div class="stream-area" id="buildStream">
+                            <!-- Agent thinking blocks rendered here -->
+                        </div>
+                        <div class="inline-editor-area" id="inlineEditorArea" style="display:none;">
+                            <div class="inline-editor-header">
+                                <span class="inline-editor-title">Generated Files</span>
+                                <span class="inline-file-count" id="inlineFileCount"></span>
+                            </div>
+                            <div class="inline-file-tabs" id="inlineFileTabs"></div>
+                            <div class="inline-monaco" id="inlineMonaco"></div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- PHASE: Complete -->
+                <section class="phase phase-complete" id="phaseComplete">
+                    <div class="complete-summary" id="completeSummary">
+                        <!-- Build summary ribbon -->
+                    </div>
+                    <div class="workspace-layout">
+                        <div class="workspace-editor">
+                            <div class="file-tabs" id="fileTabs"></div>
+                            <div class="editor-toolbar">
+                                <span class="save-hint">Ctrl+S to save</span>
+                                <span class="save-status" id="saveStatus"></span>
+                            </div>
+                            <div class="monaco-container" id="monacoContainer"></div>
+                        </div>
+                        <div class="workspace-preview" id="workspacePreview">
+                            <div class="preview-toolbar">
+                                <button class="btn-sm" id="launchPreviewBtn" disabled>Start Preview</button>
+                                <button class="btn-sm btn-danger" id="stopPreviewBtn" disabled>Stop</button>
+                                <button class="btn-sm" id="refreshPreviewBtn" disabled>Reload</button>
+                            </div>
+                            <div class="preview-container">
+                                <div class="preview-overlay" id="previewOverlay">Click "Start Preview" to launch</div>
+                                <iframe class="preview-frame" id="previewFrame" sandbox="allow-scripts allow-forms allow-same-origin" style="display:none;"></iframe>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="complete-actions">
+                        <button class="btn-action" id="downloadBtn">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                            Download ZIP
+                        </button>
+                        <button class="btn-action btn-iterate" id="iterateBtn">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>
+                            Iterate
+                        </button>
+                    </div>
+                    <!-- Iterate feedback input (shown when iterate clicked) -->
+                    <div class="iterate-panel" id="iteratePanel" style="display:none;">
+                        <textarea class="iterate-input" id="iterateInput" placeholder="What should be changed?" rows="3"></textarea>
+                        <button class="btn-generate" id="iterateSubmitBtn">Apply Changes</button>
+                    </div>
+                </section>
+
+            </div>
+        </main>
     </div>
 
-    <!-- Monaco Editor -->
+    <!-- Toast notifications -->
+    <div class="toast-host" id="toastHost"></div>
+
+    <!-- API Key modal -->
+    <dialog class="modal" id="keysModal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>API Keys (BYOK)</h3>
+                <button class="btn-close" id="keysModalClose">&times;</button>
+            </div>
+            <p class="modal-hint">Keys are encrypted server-side and tied to this browser.</p>
+            <div class="keys-list" id="keysList"></div>
+        </div>
+    </dialog>
+
+    <!-- Monaco Editor CDN -->
     <script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.52.0/min/vs/loader.js"></script>
+
+    <!-- App modules -->
     <script src="/static/js/app.js"></script>
-    <div id="toastHost" class="toast-host"></div>
 </body>
 </html>

@@ -6,42 +6,12 @@ import asyncio
 import logging
 from typing import Any
 
-from shared.providers import get_llm
+from src.dev_agent.agents.prompts import PLANNER_PROMPT
 from src.dev_agent.agents.retry import PLANNER_TASKS, emit_task_done, emit_tasks, retry_llm_call
+from src.dev_agent.llm import get_llm_for_role
 from src.dev_agent.pipeline.state import DevPipelineState, Plan
 
 logger = logging.getLogger(__name__)
-
-_PLANNER_PROMPT = """\
-You are a software architect. Given a user's app idea, produce a detailed project plan.
-
-IMPORTANT — Runtime detection rules:
-- "python" → for Flask, FastAPI, Django, scripts, CLI tools, data apps
-- "node" → for Express, Koa, Hapi, backend JavaScript/TypeScript servers
-- "react" → for React UI apps
-- "angular" → for Angular UI apps
-- "static" → for plain HTML/CSS/JS pages, landing pages, portfolios
-
-For React: plan a real multi-file Vite project — a package.json (with a "build" script),
-vite.config.js, index.html, and multiple files under src/ using ES module import/export.
-The sandbox runs `npm install` + `npm run build` and serves the built dist/. entry_point: index.html.
-
-For Angular: plan a real Angular CLI project — package.json (with a "build" script), angular.json,
-and files under src/. The sandbox runs `npm install` + `npm run build`. entry_point: index.html.
-
-Only use "static" for genuinely dependency-free pages.
-
-The user's idea: {idea}
-
-Produce a plan with:
-- app_name: short snake_case name
-- runtime: one of python/node/react/angular/static
-- tech_stack: list of technologies used
-- tasks: list of implementation tasks
-- architecture_notes: brief architecture description
-- estimated_files: list of filenames that will be generated
-- entry_point: the main file to run/serve (e.g. main.py, server.js, index.html)
-"""
 
 
 async def planner_node(state: DevPipelineState) -> dict[str, Any]:
@@ -54,7 +24,7 @@ async def planner_node(state: DevPipelineState) -> dict[str, Any]:
 
     await emit_task_done(queue, "planner", 0)  # Analyzing requirements
 
-    llm = get_llm(temperature=0.2)
+    llm = get_llm_for_role("planner", state.get("llm_context"))
     structured_llm = llm.with_structured_output(Plan)
 
     # Inject memory context if available
@@ -74,7 +44,7 @@ async def planner_node(state: DevPipelineState) -> dict[str, Any]:
     except Exception:
         pass  # Memory is optional — don't break the pipeline
 
-    prompt = _PLANNER_PROMPT.format(idea=state["idea"]) + memory_context
+    prompt = PLANNER_PROMPT.format(idea=state["idea"]) + memory_context
 
     await emit_task_done(queue, "planner", 1)  # Designing architecture
 

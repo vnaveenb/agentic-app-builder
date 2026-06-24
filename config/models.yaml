@@ -1,0 +1,112 @@
+# ════════════════════════════════════════════════════════════════════════════
+# SINGLE SOURCE OF TRUTH for LLM providers, models, and per-agent settings.
+#
+# This is the ONE file to edit to:
+#   • change the default model              → `defaults:` below
+#   • add/remove a provider or model        → `providers:` list
+#   • tune an agent's temperature/max_tokens → `roles:` map
+#
+# Loaded + validated at startup by src/dev_agent/config.py. The path is
+# overridable with the MODELS_CONFIG_PATH env var.
+#
+# Each provider's API key comes from (in order): a user's saved BYOK key
+# (encrypted, set via the UI) → the `api_key_env` environment variable below.
+# OpenAI-compatible providers (OpenRouter, Moonshot/Kimi) use langchain_provider
+# "openai" plus a `base_url`.
+#
+# NOTE: model ids change frequently. Verify the exact ids against each provider's
+# docs for your account — this file is meant to be edited.
+# ════════════════════════════════════════════════════════════════════════════
+
+defaults:
+  provider: google_genai
+  model: gemini-3.5-flash
+
+providers:
+  - id: google_genai
+    label: Google Gemini
+    langchain_provider: google_genai
+    api_key_env: GOOGLE_API_KEY
+    api_key_kwarg: google_api_key
+    byok: true
+    models:
+      - { id: gemini-3.5-flash, label: "Gemini 3.5 Flash", default: true }
+      - { id: gemini-3.1-pro-preview, label: "Gemini 3.1 Pro (preview)" }
+      - { id: gemini-3.1-flash-lite-preview, label: "Gemini 3.1 Flash-Lite (cheapest)" }
+      - { id: gemini-2.5-pro, label: "Gemini 2.5 Pro" }
+      - { id: gemini-2.5-flash, label: "Gemini 2.5 Flash" }
+
+  - id: openai
+    label: OpenAI
+    langchain_provider: openai
+    api_key_env: OPENAI_API_KEY
+    byok: true
+    models:
+      - { id: gpt-4.1, label: "GPT-4.1", default: true }
+      - { id: gpt-4o, label: "GPT-4o" }
+      - { id: gpt-4o-mini, label: "GPT-4o mini" }
+      - { id: o3, label: "o3 (reasoning)" }
+
+  - id: anthropic
+    label: Anthropic Claude
+    langchain_provider: anthropic
+    api_key_env: ANTHROPIC_API_KEY
+    byok: true
+    models:
+      - { id: claude-sonnet-4-6, label: "Claude Sonnet 4.6", default: true }
+      - { id: claude-opus-4-8, label: "Claude Opus 4.8" }
+      - { id: claude-haiku-4-5, label: "Claude Haiku 4.5" }
+
+  # OpenRouter is OpenAI-compatible — uses the openai client with a custom base_url.
+  # Model ids are namespaced as "vendor/model".
+  - id: openrouter
+    label: OpenRouter
+    langchain_provider: openai
+    base_url: https://openrouter.ai/api/v1
+    api_key_env: OPENROUTER_API_KEY
+    byok: true
+    models:
+      - { id: anthropic/claude-sonnet-4.6, label: "Claude Sonnet 4.6", default: true }
+      - { id: openai/gpt-4.1, label: "GPT-4.1" }
+      - { id: google/gemini-3.5-flash, label: "Gemini 3.5 Flash" }
+      - { id: moonshotai/kimi-k2, label: "Kimi K2" }
+
+  # Moonshot / Kimi is OpenAI-compatible. Use api.moonshot.cn for mainland China.
+  - id: moonshot
+    label: Moonshot / Kimi
+    langchain_provider: openai
+    base_url: https://api.moonshot.ai/v1
+    api_key_env: MOONSHOT_API_KEY
+    byok: true
+    models:
+      - { id: kimi-k2.5-preview, label: "Kimi K2.5 (verify exact id)", default: true }
+      - { id: moonshot-v1-128k, label: "Moonshot v1 128k" }
+
+  # Cloud providers below use platform credentials (ADC / AWS), not a simple
+  # API-key string, so they are not exposed for browser BYOK.
+  - id: google_vertexai
+    label: Google Vertex AI
+    langchain_provider: google_vertexai
+    api_key_env: GOOGLE_APPLICATION_CREDENTIALS
+    byok: false
+    models:
+      - { id: gemini-2.5-flash, label: "Gemini 2.5 Flash (Vertex)", default: true }
+      - { id: gemini-2.5-pro, label: "Gemini 2.5 Pro (Vertex)" }
+
+  - id: bedrock
+    label: AWS Bedrock
+    langchain_provider: bedrock
+    api_key_env: AWS_ACCESS_KEY_ID
+    byok: false
+    models:
+      - { id: anthropic.claude-sonnet-4-6-v1:0, label: "Claude Sonnet 4.6 (Bedrock)", default: true }
+
+# Per-agent (role) generation settings. Temperatures were previously hardcoded
+# and duplicated across agent files + crew_backend.py — now they live here.
+roles:
+  planner:   { temperature: 0.2 }
+  developer: { temperature: 0.1, max_tokens: 32768 }
+  tester:    { temperature: 0.0 }
+  reviewer:  { temperature: 0.3 }
+  chat:      { temperature: 0.3 }
+  memory:    { temperature: 0.1 }

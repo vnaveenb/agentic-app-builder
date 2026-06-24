@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Literal, TypedDict
+from typing import Any, Literal, NotRequired, TypedDict
 
 from pydantic import BaseModel
 
@@ -28,6 +28,7 @@ class Plan(BaseModel):
     architecture_notes: str
     estimated_files: list[str]
     entry_point: str = "main.py"
+    ui_design_notes: str = ""
 
 
 class TestCase(BaseModel):
@@ -72,3 +73,6 @@ class DevPipelineState(TypedDict):
     current_agent: str
     event_queue: Any | None
     user_feedback: str
+    # Optional per-request LLM selection (provider/model/BYOK key). Absent on
+    # legacy/test states — agents read it via state.get("llm_context").
+    llm_context: NotRequired[Any]

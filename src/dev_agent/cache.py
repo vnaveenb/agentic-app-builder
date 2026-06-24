@@ -32,10 +32,11 @@ async def close_redis() -> None:
 async def cache_session_state(session_id: str, state: dict[str, Any]) -> None:
     """Cache session state in Redis (excluding non-serializable fields)."""
     r = await get_redis()
-    # Strip non-serializable fields
+    # Strip non-serializable / sensitive fields. llm_context holds a plaintext
+    # BYOK API key and must never be persisted.
     serializable = {
         k: v for k, v in state.items()
-        if k not in ("event_queue",) and v is not None
+        if k not in ("event_queue", "llm_context") and v is not None
     }
     # Handle Pydantic models
     for key in ("plan", "test_report", "preview"):

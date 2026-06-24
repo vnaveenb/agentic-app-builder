@@ -19,6 +19,7 @@ from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text as select_text
 
+from src.dev_agent import config
 from src.dev_agent.cache import (
     cache_session_state,
     close_redis,
@@ -28,10 +29,12 @@ from src.dev_agent.cache import (
 )
 from src.dev_agent.db.database import async_session_factory, close_db, init_db
 from src.dev_agent.db.models import Session as DBSession
+from src.dev_agent.llm import LLMContext, build_llm_context
+from src.dev_agent.agents.planner import planner_node
 from src.dev_agent.pipeline.base import PipelineBackend
 from src.dev_agent.pipeline.crew_backend import CrewAIBackend
 from src.dev_agent.pipeline.graph import LangGraphBackend
-from src.dev_agent.pipeline.state import DevPipelineState
+from src.dev_agent.pipeline.state import DevPipelineState, Plan
 from src.dev_agent.sandbox import gateway, preview_server
 from src.dev_agent.schemas import (
     ChatHistoryResponse,
@@ -48,6 +51,9 @@ from src.dev_agent.schemas import (
     MemoryListResponse,
     MemorySchema,
     PreviewStartResponse,
+    ProviderInfo,
+    ProviderKeyRequest,
+    ProvidersResponse,
     SessionListResponse,
     SessionSummary,
     StatusResponse,
@@ -119,7 +125,11 @@ app.mount(
 
 @app.get("/health", response_model=HealthResponse)
 async def health() -> HealthResponse:
-    provider = os.environ.get("LLM_PROVIDER", "google_genai:gemini-2.0-flash")
+    try:
+        defaults = config.get_default()
+        provider = f"{defaults.provider}:{defaults.model}"
+    except Exception:
+        provider = os.environ.get("LLM_PROVIDER", "google_genai:gemini-3.5-flash")
     redis_ok = await redis_health_check()
     db_ok = True
     try:
@@ -148,6 +158,10 @@ async def generate(req: GenerateRequest) -> GenerateResponse:
     queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
     _event_queues[session_id] = queue
 
+    llm_context = await build_llm_context(
+        req.client_id, req.provider, req.model, req.api_key
+    )
+
     initial_state: DevPipelineState = {
         "session_id": session_id,
         "idea": req.idea,
@@ -164,6 +178,7 @@ async def generate(req: GenerateRequest) -> GenerateResponse:
         "current_agent": "",
         "event_queue": queue,
         "user_feedback": "",
+        "llm_context": llm_context,
     }
     _session_states[session_id] = initial_state
     _session_backends[session_id] = req.backend
@@ -187,6 +202,29 @@ async def generate(req: GenerateRequest) -> GenerateResponse:
     asyncio.create_task(_run_pipeline_task(session_id, initial_state, queue, req.backend))
 
     return GenerateResponse(session_id=session_id)
+
+
+@app.post("/approve-plan/{session_id}")
+async def approve_plan(session_id: str) -> dict[str, str]:
+    """Approve the plan and start the build pipeline."""
+    state = _session_states.get(session_id)
+    if not state:
+        raise HTTPException(404, "Session not found")
+    if state.get("status") != "awaiting_approval":
+        raise HTTPException(409, f"Session is not awaiting approval (status={state.get('status')})")
+
+    queue = _event_queues.get(session_id)
+    if not queue:
+        queue = asyncio.Queue()
+        _event_queues[session_id] = queue
+
+    state["status"] = "running"
+    state["iteration"] = 0
+    backend_name = _session_backends.get(session_id, "langgraph")
+
+    asyncio.create_task(_run_build_task(session_id, state, queue, backend_name))
+
+    return {"status": "approved", "session_id": session_id}
 
 
 @app.get("/stream/{session_id}")
@@ -214,6 +252,8 @@ def status(session_id: str) -> StatusResponse:
     state = _session_states.get(session_id)
     if not state:
         raise HTTPException(404, "Session not found")
+    ctx = state.get("llm_context")
+    defaults = config.get_default()
     return StatusResponse(
         session_id=session_id,
         status=state["status"],
@@ -222,6 +262,8 @@ def status(session_id: str) -> StatusResponse:
         max_iterations=state["max_iterations"],
         runtime=state["runtime"],
         errors=state["errors"],
+        provider=(ctx.provider if ctx and ctx.provider else defaults.provider),
+        model=(ctx.model if ctx and ctx.model else defaults.model),
     )
 
 
@@ -308,6 +350,13 @@ async def iterate(session_id: str, req: IterateRequest) -> GenerateResponse:
     state["test_report"] = None
     state["errors"] = []
     state["event_queue"] = queue
+
+    # Re-apply provider/model/key if the client sent them; otherwise keep the
+    # selection from the original /generate call.
+    if req.provider or req.model or req.client_id or req.api_key:
+        state["llm_context"] = await build_llm_context(
+            req.client_id, req.provider, req.model, req.api_key
+        )
 
     asyncio.create_task(_run_iterate_task(session_id, state, queue, _session_backends.get(session_id, "langgraph")))
 
@@ -511,6 +560,15 @@ async def send_chat_message(session_id: str, req: ChatMessageRequest) -> ChatRes
     if not state:
         raise HTTPException(404, "Session not found")
 
+    # Resolve the LLM selection: prefer the request's, else the session's.
+    if req.provider or req.model or req.client_id or req.api_key:
+        ctx: LLMContext | None = await build_llm_context(
+            req.client_id, req.provider, req.model, req.api_key
+        )
+        state["llm_context"] = ctx
+    else:
+        ctx = state.get("llm_context")
+
     async with async_session_factory() as db:
         # Store user message
         await store_message(db, session_id, "user", req.message)
@@ -525,7 +583,7 @@ async def send_chat_message(session_id: str, req: ChatMessageRequest) -> ChatRes
 
         # Generate AI response
         response_text, should_iterate = await generate_chat_response(
-            db, session_id, req.message, session_context
+            db, session_id, req.message, session_context, ctx
         )
 
         # Store assistant response
@@ -672,6 +730,94 @@ async def clear_memories() -> dict[str, Any]:
     return {"status": "cleared", "deleted_count": count}
 
 
+# ── Provider / BYOK key endpoints ─────────────────────────────────────────────
+
+
+@app.get("/providers", response_model=ProvidersResponse)
+async def list_providers(client_id: str | None = None) -> ProvidersResponse:
+    """Public provider/model registry for the UI dropdown.
+
+    When ``client_id`` is given, marks which providers this browser has saved a
+    (encrypted) key for. Never returns key material.
+    """
+    from src.dev_agent.security import keyvault
+
+    registry = config.public_registry()
+    defaults = config.get_default()
+
+    configured: set[str] = set()
+    if client_id:
+        try:
+            from src.dev_agent.db.keys_store import list_configured_providers
+
+            async with async_session_factory() as db:
+                configured = await list_configured_providers(db, client_id)
+        except Exception as exc:
+            logger.warning("Could not list configured providers: %s", exc)
+
+    providers = [
+        ProviderInfo(
+            id=str(p["id"]),
+            label=str(p["label"]),
+            byok=bool(p["byok"]),
+            default_model=str(p["default_model"]),
+            models=p["models"],  # type: ignore[arg-type]
+            configured=p["id"] in configured,
+        )
+        for p in registry
+    ]
+    return ProvidersResponse(
+        providers=providers,
+        default_provider=defaults.provider,
+        default_model=defaults.model,
+        encryption_enabled=keyvault.is_configured(),
+    )
+
+
+@app.put("/providers/{provider}/key")
+async def save_provider_key(provider: str, req: ProviderKeyRequest) -> dict[str, str]:
+    """Encrypt and persist a user's API key for a provider (BYOK)."""
+    from src.dev_agent.security import keyvault
+
+    if config.load_model_config().provider(provider) is None:
+        raise HTTPException(404, f"Unknown provider '{provider}'")
+    if not keyvault.is_configured():
+        raise HTTPException(
+            503,
+            "Key storage is disabled — set ENCRYPTION_KEY on the server to enable BYOK.",
+        )
+
+    from src.dev_agent.db.keys_store import upsert_provider_key
+
+    async with async_session_factory() as db:
+        await upsert_provider_key(db, req.client_id, provider, req.api_key)
+    return {"status": "saved", "provider": provider}
+
+
+@app.delete("/providers/{provider}/key")
+async def remove_provider_key(provider: str, client_id: str) -> dict[str, str]:
+    """Delete a user's saved key for a provider."""
+    from src.dev_agent.db.keys_store import delete_provider_key
+
+    async with async_session_factory() as db:
+        deleted = await delete_provider_key(db, client_id, provider)
+    if not deleted:
+        raise HTTPException(404, "No saved key for that provider")
+    return {"status": "deleted", "provider": provider}
+
+
+# ── File retrieval (fallback for SSE delivery issues) ─────────────────────────
+
+
+@app.get("/files/{session_id}")
+async def get_files(session_id: str) -> dict[str, Any]:
+    """Return generated files for a session (fallback if SSE delivery fails)."""
+    state = _session_states.get(session_id)
+    if not state:
+        raise HTTPException(404, "Session not found")
+    return {"files": state.get("files", {}), "runtime": state.get("runtime", "")}
+
+
 # ── Preview endpoints ─────────────────────────────────────────────────────────
 
 
@@ -728,28 +874,62 @@ async def _run_pipeline_task(
     queue: asyncio.Queue[dict[str, Any]],
     backend_name: str = "langgraph",
 ) -> None:
-    """Run the full agent pipeline as a background task."""
+    """Run the planner, emit plan_ready, then wait for user approval."""
+    try:
+        plan_result = await planner_node(initial_state)
+        state = _session_states[session_id]
+        state["plan"] = plan_result["plan"]
+        state["runtime"] = plan_result["runtime"]
+        state["current_agent"] = "planner"
+        state["status"] = "awaiting_approval"
+
+        plan = plan_result["plan"]
+        await queue.put({
+            "event": "plan_ready",
+            "data": {
+                "app_name": plan.app_name,
+                "runtime": plan.runtime,
+                "tech_stack": plan.tech_stack,
+                "architecture": plan.architecture_notes,
+                "files": plan.estimated_files,
+                "entry_point": plan.entry_point,
+                "tasks": [{"id": t.id, "title": t.title, "description": t.description} for t in plan.tasks],
+                "ui_design_notes": plan.ui_design_notes,
+            },
+        })
+
+    except Exception as exc:
+        logger.exception("Planner failed for session %s", session_id)
+        _session_states[session_id]["status"] = "error"
+        _session_states[session_id]["errors"].append(str(exc))
+        await queue.put({"event": "error", "message": str(exc)})
+
+
+async def _run_build_task(
+    session_id: str,
+    state: DevPipelineState,
+    queue: asyncio.Queue[dict[str, Any]],
+    backend_name: str = "langgraph",
+) -> None:
+    """Run the build pipeline (developer → designer → tester → reviewer) after plan approval."""
     try:
         backend = get_backend(backend_name)
-        final_state = await backend.run(initial_state, queue)
+        final_state = await backend.run_iterate(state, queue)
 
         _session_states[session_id] = final_state
         _session_states[session_id]["status"] = "done"
 
-        # Record initial version in history (in-memory)
         if session_id not in _session_histories:
             _session_histories[session_id] = []
         _session_histories[session_id].append({
             "version": 1,
             "description": f"Initial Build ({backend_name})",
             "files": dict(final_state.get("files", {})),
-            "is_current": True
+            "is_current": True,
         })
 
-        # Persist version to PostgreSQL
         try:
             async with async_session_factory() as db:
-                # Update session record (created at /generate time)
                 from sqlalchemy import update
                 await db.execute(
                     update(DBSession)
@@ -762,8 +942,6 @@ async def _run_pipeline_task(
                     )
                 )
                 await db.commit()
-
-                # Create v1
                 await create_version(
                     db=db,
                     session_id=session_id,
@@ -779,29 +957,29 @@ async def _run_pipeline_task(
         except Exception as db_exc:
             logger.warning("Failed to persist to DB (in-memory still works): %s", db_exc)
 
-        # Cache state in Redis
         try:
             await cache_session_state(session_id, final_state)
         except Exception:
-            pass  # Redis is optional
+            pass
 
-        # Extract and store memories from this session (async, non-blocking)
         try:
             from src.dev_agent.memory.memory_manager import extract_and_store_memories
-
             async with async_session_factory() as db:
                 await extract_and_store_memories(
                     db=db,
-                    idea=initial_state["idea"],
+                    idea=state["idea"],
                     runtime=final_state["runtime"],
                     files=final_state.get("files", {}),
                     review_notes=final_state.get("review_notes", []),
                     test_report=final_state["test_report"].model_dump() if final_state.get("test_report") else None,
+                    ctx=final_state.get("llm_context"),
                 )
         except Exception as mem_exc:
             logger.warning("Memory extraction failed (non-critical): %s", mem_exc)
 
-        # Push completion event with files embedded
+        file_count = len(final_state.get("files", {}))
+        logger.info("pipeline_done: emitting %d files for session %s", file_count, session_id)
+
         await queue.put({
             "event": "pipeline_done",
             "files": final_state["files"],
@@ -811,13 +989,10 @@ async def _run_pipeline_task(
         })
 
     except Exception as exc:
-        logger.exception("Pipeline failed for session %s", session_id)
+        logger.exception("Build pipeline failed for session %s", session_id)
         _session_states[session_id]["status"] = "error"
         _session_states[session_id]["errors"].append(str(exc))
-        await queue.put({
-            "event": "error",
-            "message": str(exc),
-        })
+        await queue.put({"event": "error", "message": str(exc)})
 
 
 async def _run_iterate_task(

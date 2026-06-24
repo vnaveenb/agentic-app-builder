@@ -2,9 +2,11 @@
 LLM and embeddings factory.
 
 Provider is selected via environment variables using LangChain's
-provider:model-name format:
+provider:model-name format. NOTE: for the app's multi-provider / BYOK path the
+single source of truth is config/models.yaml (see src/dev_agent/config.py and
+src/dev_agent/llm.py); this env-based factory is the fallback/default path.
 
-    LLM_PROVIDER=google_genai:gemini-2.0-flash          (default)
+    LLM_PROVIDER=google_genai:gemini-3.5-flash          (default)
     LLM_PROVIDER=google_vertexai:gemini-2.0-flash-001   (Vertex AI)
     LLM_PROVIDER=openai:gpt-4o                          (swap-ready)
     LLM_PROVIDER=anthropic:claude-opus-4-8              (swap-ready)
@@ -27,9 +29,42 @@ from langchain_core.embeddings import Embeddings
 from langchain_core.language_models import BaseChatModel
 
 _DEFAULT_LLM_PROVIDER = "google_genai"
-_DEFAULT_LLM_MODEL = "gemini-2.0-flash"
+_DEFAULT_LLM_MODEL = "gemini-3.5-flash"
 _DEFAULT_EMBEDDINGS_PROVIDER = "google_genai"
 _DEFAULT_EMBEDDINGS_MODEL = "models/text-embedding-004"
+
+
+def build_chat_model(
+    *,
+    langchain_provider: str,
+    model: str,
+    temperature: float = 0.0,
+    max_tokens: int | None = None,
+    api_key: str | None = None,
+    api_key_kwarg: str = "api_key",
+    base_url: str | None = None,
+) -> BaseChatModel:
+    """Construct a chat model directly (no env parsing, no caching).
+
+    This is the low-level builder used by the per-request, multi-provider path
+    (BYOK). ``api_key_kwarg`` lets each provider name its key argument correctly
+    (e.g. ``google_api_key`` for Gemini, ``api_key`` for OpenAI/Anthropic), and
+    ``base_url`` enables OpenAI-compatible providers (OpenRouter, Moonshot/Kimi).
+
+    NOTE: intentionally NOT cached — caching on a secret api_key would both leak
+    keys into the cache and grow it unbounded.
+    """
+    kwargs: dict[str, Any] = {"temperature": temperature}
+    if max_tokens is not None:
+        kwargs["max_tokens"] = max_tokens
+    if api_key:
+        kwargs[api_key_kwarg] = api_key
+    if base_url:
+        kwargs["base_url"] = base_url
+    return cast(
+        BaseChatModel,
+        init_chat_model(model=model, model_provider=langchain_provider, **kwargs),
+    )
 
 
 def _parse_provider_model(
@@ -102,4 +137,4 @@ def get_embeddings(
     return init_embeddings(model=f"{provider}:{model}")
 
 
-__all__ = ["get_llm", "get_embeddings"]
+__all__ = ["get_llm", "get_embeddings", "build_chat_model"]

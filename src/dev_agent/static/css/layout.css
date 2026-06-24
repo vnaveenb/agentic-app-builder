@@ -1,0 +1,162 @@
+.app-shell {
+    display: grid;
+    grid-template-columns: var(--sidebar-width) 1fr;
+    height: 100vh;
+    overflow: hidden;
+}
+
+.app-shell.sidebar-collapsed {
+    grid-template-columns: var(--sidebar-collapsed) 1fr;
+}
+
+/* ── Sidebar ── */
+.sidebar {
+    background: var(--bg-surface);
+    border-right: 1px solid var(--border-default);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    z-index: var(--z-sidebar);
+    transition: width var(--transition-slow);
+}
+
+.sidebar-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: var(--space-4) var(--space-4) var(--space-3);
+    border-bottom: 1px solid var(--border-default);
+}
+
+.brand {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+}
+
+.brand-icon { color: var(--accent-primary); }
+
+.brand-name {
+    font-size: var(--text-md);
+    font-weight: 600;
+    letter-spacing: -0.3px;
+}
+
+.sidebar-toggle {
+    width: 28px;
+    height: 28px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: var(--radius-sm);
+    color: var(--text-muted);
+    transition: color var(--transition-fast), background var(--transition-fast);
+}
+.sidebar-toggle:hover { color: var(--text-primary); background: var(--bg-surface-raised); }
+
+.sidebar-content {
+    flex: 1;
+    overflow-y: auto;
+    padding: var(--space-3);
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+}
+
+.sidebar-section {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+}
+
+.section-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.section-title {
+    font-size: var(--text-xs);
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--text-muted);
+}
+
+.sidebar-footer {
+    padding: var(--space-3);
+    border-top: 1px solid var(--border-default);
+}
+
+/* ── Main Area ── */
+.main-area {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    position: relative;
+}
+
+/* ── Status Bar ── */
+.status-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: var(--space-3) var(--space-6);
+    border-bottom: 1px solid var(--border-default);
+    background: var(--bg-surface);
+    min-height: var(--status-height);
+    opacity: 0;
+    transform: translateY(-4px);
+    transition: opacity var(--transition-normal), transform var(--transition-normal);
+}
+
+.status-bar.visible {
+    opacity: 1;
+    transform: translateY(0);
+}
+
+.status-meta {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+}
+
+/* ── Phase Container ── */
+.phase-container {
+    flex: 1;
+    overflow: hidden;
+    position: relative;
+}
+
+.phase {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    overflow-y: auto;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity var(--transition-phase);
+}
+
+.phase.active {
+    opacity: 1;
+    pointer-events: auto;
+}
+
+/* ── Responsive ── */
+@media (max-width: 768px) {
+    .app-shell {
+        grid-template-columns: 1fr;
+    }
+    .sidebar {
+        position: fixed;
+        left: 0;
+        top: 0;
+        bottom: 0;
+        width: var(--sidebar-width);
+        transform: translateX(-100%);
+        transition: transform var(--transition-slow);
+    }
+    .sidebar.open { transform: translateX(0); }
+}

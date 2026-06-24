@@ -15,7 +15,16 @@ from typing import Any
 
 from pydantic import BaseModel, ValidationError
 
-from shared.providers import get_llm
+from src.dev_agent.agents.prompts import (
+    DEVELOPER_PROMPT,
+    FEEDBACK_TEMPLATE,
+    PLANNER_PROMPT,
+    REVIEWER_PROMPT,
+    RUNTIME_INSTRUCTIONS,
+    STATIC_ANALYSIS_PROMPT,
+    USER_FEEDBACK_TEMPLATE,
+)
+from src.dev_agent.llm import get_llm_for_role
 from src.dev_agent.pipeline.base import PipelineBackend
 from src.dev_agent.pipeline.executor import run_tests_in_sandbox
 from src.dev_agent.pipeline.state import DevPipelineState, Plan, TestReport
@@ -24,31 +33,6 @@ logger = logging.getLogger(__name__)
 
 # Attempt to import CrewAI — graceful fallback if not installed
 CREWAI_AVAILABLE = importlib.util.find_spec("crewai") is not None
-
-
-# ── Runtime instruction map (shared with developer agent) ─────────────────────
-
-_RUNTIME_INSTRUCTIONS = {
-    "python": "Flask/FastAPI with requirements.txt, entry point on PORT env var",
-    "node": "Express/Koa with package.json, entry point on process.env.PORT",
-    "react": "Single index.html with CDN imports from unpkg.com/react — NO npm/webpack/vite",
-    "angular": "Single index.html with CDN imports from cdnjs.cloudflare.com — NO npm/ng CLI",
-    "static": "Pure HTML/CSS/JS, no frameworks, entry point is index.html",
-}
-
-_FEEDBACK_TEMPLATE = """
-⚠️ PREVIOUS ITERATION FAILED — FIX THESE BUGS:
-{output_summary}
-
-Regenerate the files with these specific issues fixed. Keep everything else the same.
-"""
-
-_USER_FEEDBACK_TEMPLATE = """
-⚠️ USER REQUESTED CHANGES:
-{user_feedback}
-
-Apply these changes to the existing code. Keep everything else the same.
-"""
 
 
 # ── Helper: parse developer files from raw text ──────────────────────────────
@@ -129,32 +113,10 @@ class CrewAIBackend(PipelineBackend):
     ) -> DevPipelineState:
         await queue.put({"event": "agent_start", "agent": "planner"})
 
-        llm = get_llm(temperature=0.2)
+        llm = get_llm_for_role("planner", state.get("llm_context"))
         structured_llm = llm.with_structured_output(Plan)
 
-        prompt = f"""You are a software architect. Given a user's app idea, produce a detailed project plan.
-
-IMPORTANT — Runtime detection rules:
-- "python" → for Flask, FastAPI, Django, scripts, CLI tools, data apps
-- "node" → for Express, Koa, Hapi, backend JavaScript/TypeScript servers
-- "react" → for React UI apps (use CDN imports from unpkg.com/react — do NOT use npm/webpack/vite)
-- "angular" → for Angular UI apps (use CDN imports from cdnjs.cloudflare.com — do NOT use npm/ng CLI)
-- "static" → for plain HTML/CSS/JS pages, landing pages, portfolios
-
-For React and Angular: generate a single index.html that loads the framework from CDN.
-Do NOT generate package.json or require any build step for React/Angular projects.
-
-The user's idea: {state['idea']}
-
-Produce a plan with:
-- app_name: short snake_case name
-- runtime: one of python/node/react/angular/static
-- tech_stack: list of technologies used
-- tasks: list of implementation tasks
-- architecture_notes: brief architecture description
-- estimated_files: list of filenames that will be generated
-- entry_point: the main file to run/serve (e.g. main.py, server.js, index.html)
-"""
+        prompt = PLANNER_PROMPT.format(idea=state["idea"])
         plan: Plan = await structured_llm.ainvoke(prompt)  # type: ignore[assignment]
 
         logger.info("[CrewAI] Plan created: app=%s, runtime=%s", plan.app_name, plan.runtime)
@@ -230,42 +192,29 @@ Produce a plan with:
         await queue.put({"event": "agent_start", "agent": "developer", "data": {"iteration": iteration + 1}})
 
         runtime = state["runtime"]
-        runtime_instructions = _RUNTIME_INSTRUCTIONS.get(runtime, _RUNTIME_INSTRUCTIONS["python"])
+        runtime_instructions = RUNTIME_INSTRUCTIONS.get(runtime, RUNTIME_INSTRUCTIONS["python"])
 
         # Build feedback section
         feedback_section = ""
         tr = state.get("test_report")
         if iteration > 0 and tr is not None:
-            feedback_section = _FEEDBACK_TEMPLATE.format(output_summary=tr.output_summary[:2000])
+            feedback_section = FEEDBACK_TEMPLATE.format(output_summary=tr.output_summary[:2000])
         if state.get("user_feedback"):
-            feedback_section += _USER_FEEDBACK_TEMPLATE.format(user_feedback=state["user_feedback"])
+            feedback_section += USER_FEEDBACK_TEMPLATE.format(user_feedback=state["user_feedback"])
 
-        prompt = f"""You are an expert software developer. Generate complete, working code files based on the plan below.
+        prompt = DEVELOPER_PROMPT.format(
+            app_name=plan.app_name,
+            runtime=runtime,
+            tech_stack=", ".join(plan.tech_stack),
+            architecture_notes=plan.architecture_notes,
+            tasks="\n".join(f"- {t.title}: {t.description}" for t in plan.tasks),
+            estimated_files=", ".join(plan.estimated_files),
+            entry_point=plan.entry_point,
+            runtime_instructions=runtime_instructions,
+            feedback_section=feedback_section,
+        )
 
-PROJECT PLAN:
-- App: {plan.app_name}
-- Runtime: {runtime}
-- Tech Stack: {', '.join(plan.tech_stack)}
-- Architecture: {plan.architecture_notes}
-- Tasks: {chr(10).join(f'- {t.title}: {t.description}' for t in plan.tasks)}
-- Expected files: {', '.join(plan.estimated_files)}
-- Entry point: {plan.entry_point}
-
-RUNTIME-SPECIFIC RULES:
-{runtime_instructions}
-
-REQUIREMENTS:
-1. Generate ALL files listed in the plan
-2. Code must be complete and runnable — no placeholders or TODOs
-3. Include a test file if runtime supports it
-4. Entry point must work as specified
-
-{feedback_section}
-
-Generate the complete file set now.
-"""
-
-        llm = get_llm(temperature=0.1, max_tokens=32768)
+        llm = get_llm_for_role("developer", state.get("llm_context"))
         structured_llm = llm.with_structured_output(_DeveloperOutput, include_raw=True)
 
         result: _DeveloperOutput | None = None
@@ -335,23 +284,13 @@ Generate the complete file set now.
             truncated = code[:4000] + ("..." if len(code) > 4000 else "")
             files_summary += f"\n--- {fname} ---\n{truncated}\n"
 
-        static_prompt = f"""You are a senior code reviewer. Analyze the following code for critical bugs, security issues, and logic errors.
-
-Runtime: {runtime}
-Files:
-{files_summary[:20000]}
-
-Evaluate:
-1. Are there any critical bugs that would prevent the app from running?
-2. Are there security vulnerabilities (SQL injection, XSS, path traversal, etc.)?
-3. Are there logic errors in the core functionality?
-4. Does the entry point work correctly?
-
-Return a test report with your findings. Set has_critical_bugs=true ONLY if there are bugs that would crash the app or create severe security holes.
-"""
+        static_prompt = STATIC_ANALYSIS_PROMPT.format(
+            runtime=runtime,
+            files_summary=files_summary[:20000],
+        )
 
         try:
-            llm = get_llm(temperature=0.0)
+            llm = get_llm_for_role("tester", state.get("llm_context"))
             structured_llm = llm.with_structured_output(TestReport)
             llm_report: TestReport = await structured_llm.ainvoke(static_prompt)  # type: ignore[assignment]
         except Exception as exc:
@@ -420,26 +359,14 @@ Return a test report with your findings. Set has_critical_bugs=true ONLY if ther
         if tr is not None:
             test_summary = f"passed={tr.passed_count}, failed={tr.failed_count}, critical_bugs={tr.has_critical_bugs}"
 
-        prompt = f"""You are a senior software reviewer. Review the following generated code and make improvements.
+        prompt = REVIEWER_PROMPT.format(
+            app_name=plan.app_name,
+            runtime=state["runtime"],
+            test_summary=test_summary,
+            files_summary=files_summary[:30000],
+        )
 
-App: {plan.app_name}
-Runtime: {state['runtime']}
-Test Results: {test_summary}
-
-Files to review:
-{files_summary[:30000]}
-
-Your job:
-1. Fix any remaining minor issues (formatting, naming, edge cases)
-2. Add helpful comments where code is complex
-3. Ensure the code follows best practices for the runtime
-4. Return ONLY the files you modified in improved_files — do NOT include unchanged files
-5. Provide review_notes: a list of 3-5 observations about the code quality
-
-Do NOT make breaking changes. Keep the same functionality.
-"""
-
-        llm = get_llm(temperature=0.3)
+        llm = get_llm_for_role("reviewer", state.get("llm_context"))
         structured_llm = llm.with_structured_output(_ReviewOutput)
         result: _ReviewOutput = await structured_llm.ainvoke(prompt)  # type: ignore[assignment]
 

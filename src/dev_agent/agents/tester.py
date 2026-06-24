@@ -6,28 +6,13 @@ import asyncio
 import logging
 from typing import Any
 
-from shared.providers import get_llm
+from src.dev_agent.agents.prompts import STATIC_ANALYSIS_PROMPT
 from src.dev_agent.agents.retry import TESTER_TASKS, emit_task_done, emit_tasks, retry_llm_call
+from src.dev_agent.llm import get_llm_for_role
 from src.dev_agent.pipeline.executor import run_tests_in_sandbox
 from src.dev_agent.pipeline.state import DevPipelineState, TestReport
 
 logger = logging.getLogger(__name__)
-
-_STATIC_ANALYSIS_PROMPT = """\
-You are a senior code reviewer. Analyze the following code for critical bugs, security issues, and logic errors.
-
-Runtime: {runtime}
-Files:
-{files_summary}
-
-Evaluate:
-1. Are there any critical bugs that would prevent the app from running?
-2. Are there security vulnerabilities (SQL injection, XSS, path traversal, etc.)?
-3. Are there logic errors in the core functionality?
-4. Does the entry point work correctly?
-
-Return a test report with your findings. Set has_critical_bugs=true ONLY if there are bugs that would crash the app or create severe security holes. Minor style issues are NOT critical.
-"""
 
 
 async def tester_node(state: DevPipelineState) -> dict[str, Any]:
@@ -58,13 +43,13 @@ async def tester_node(state: DevPipelineState) -> dict[str, Any]:
         truncated = code[:4000] + ("..." if len(code) > 4000 else "")
         files_summary += f"\n--- {fname} ---\n{truncated}\n"
 
-    prompt = _STATIC_ANALYSIS_PROMPT.format(
+    prompt = STATIC_ANALYSIS_PROMPT.format(
         runtime=runtime,
         files_summary=files_summary[:20000],  # Overall limit
     )
 
     try:
-        llm = get_llm(temperature=0.0)
+        llm = get_llm_for_role("tester", state.get("llm_context"))
         structured_llm = llm.with_structured_output(TestReport)
         llm_report: TestReport = await retry_llm_call(
             structured_llm.ainvoke,

@@ -113,6 +113,12 @@ REVIEWER_TASKS = [
     "Generating review notes",
 ]
 
+DESIGNER_TASKS = [
+    "Analyzing UI quality",
+    "Enhancing visual design",
+    "Finalizing styled files",
+]
+
 
 async def emit_tasks(queue: asyncio.Queue | None, agent: str, tasks: list[str]) -> None:
     """Emit a tasks event with the full task list for an agent."""

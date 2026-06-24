@@ -11,6 +11,8 @@ services:
       # Delegate ALL generated-code execution (tests + previews) to the
       # isolated sandbox service, which holds no secrets.
       SANDBOX_URL: http://sandbox:8009
+    volumes:
+      - appdata:/app/data
     depends_on:
       postgres:
         condition: service_healthy
@@ -84,3 +86,4 @@ networks:
 volumes:
   pgdata:
   redisdata:
+  appdata:

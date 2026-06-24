@@ -3,9 +3,20 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Integer, String, Text, func
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    Enum,
+    ForeignKey,
+    Integer,
+    LargeBinary,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -80,6 +91,29 @@ class Message(Base):
 
     # Relationships
     session: Mapped[Session] = relationship(back_populates="messages")
+
+
+class ProviderKey(Base):
+    """A user-supplied (BYOK) LLM provider API key, encrypted at rest.
+
+    Scoped to a browser-minted ``client_id`` (there is no login), so keys persist
+    across sessions for the same browser. The key bytes are Fernet-encrypted by
+    src/dev_agent/security/keyvault.py — plaintext is never stored.
+    """
+
+    __tablename__ = "provider_keys"
+    __table_args__ = (UniqueConstraint("client_id", "provider", name="uq_client_provider"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    client_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    provider: Mapped[str] = mapped_column(String(50), nullable=False)
+    encrypted_key: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
 
 
 class Memory(Base):

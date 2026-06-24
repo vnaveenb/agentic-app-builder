@@ -1,747 +1,806 @@
-/* AI Dev Agent — front-end controller.
- * Extracted from the former inline <script> and extended with: live agent
- * timing, a test-case explorer, real preview-error surfacing, in-iframe console
- * capture, a memory manager, and a richer version timeline. No build step. */
+/**
+ * AI Dev Agent — Conversational Studio (v2)
+ * Phase-based state machine with progressive disclosure.
+ */
 (function () {
-    "use strict";
+"use strict";
 
-    // ─── State ───
-    let sessionId = null;
-    let eventSource = null;
-    let editor = null;
-    let editorModels = {};
-    let activeFile = null;
-    let completedAgents = 0;
+// ── State ──
+let sessionId = null;
+let eventSource = null;
+let editor = null;
+let inlineEditor = null;
+let editorModels = {};
+let inlineModels = {};
+let currentPhase = "ideation";
+let buildStartTime = null;
+let buildTimerInterval = null;
+let agentTimes = {};
 
-    // Timing
-    const agentTimes = {};       // agent → { start, elapsedMs }
-    let buildStartTime = null;
-    let buildTimerInterval = null;
+// ── DOM Refs ──
+const $ = (sel) => document.querySelector(sel);
+const $$ = (sel) => document.querySelectorAll(sel);
 
-    // ─── DOM refs ───
-    const appLayout = document.getElementById("appLayout");
-    const ideaInput = document.getElementById("ideaInput");
-    const runtimeSelect = document.getElementById("runtimeSelect");
-    const iterSlider = document.getElementById("iterSlider");
-    const iterValue = document.getElementById("iterValue");
-    const generateBtn = document.getElementById("generateBtn");
-    const providerBadge = document.getElementById("providerBadge");
-    const sessionInfo = document.getElementById("sessionInfo");
-    const sessionIdEl = document.getElementById("sessionId");
-    const iterateSection = document.getElementById("iterateSection");
-    const iterateInput = document.getElementById("iterateInput");
-    const iterateBtn = document.getElementById("iterateBtn");
-    const eventLog = document.getElementById("eventLog");
-    const downloadBtn = document.getElementById("downloadBtn");
-    const monacoContainer = document.getElementById("monacoContainer");
-    const codePlaceholder = document.getElementById("codePlaceholder");
-    const fileTabs = document.getElementById("fileTabs");
-    const saveStatus = document.getElementById("saveStatus");
-    const previewOverlay = document.getElementById("previewOverlay");
-    const previewFrame = document.getElementById("previewFrame");
-    const previewBanner = document.getElementById("previewBanner");
-    const terminalOutput = document.getElementById("terminalOutput");
-    const chatMessages = document.getElementById("chatMessages");
-    const chatInput = document.getElementById("chatInput");
-    const chatSendBtn = document.getElementById("chatSendBtn");
-    const memorySection = document.getElementById("memorySection");
-    const memoryCards = document.getElementById("memoryCards");
-    const versionTimeline = document.getElementById("versionTimeline");
-    const timelineTrack = document.getElementById("timelineTrack");
-    const buildTimer = document.getElementById("buildTimer");
-    const toastHost = document.getElementById("toastHost");
+const appShell = $("#appShell");
+const statusBar = $("#statusBar");
+const phaseContainer = $("#phaseContainer");
+const toastHost = $("#toastHost");
 
-    let currentStreamAgent = null;
-    let currentDetails = null;
-    let currentDetailsContent = null;
-    let activeAgentFilter = null;
+// Ideation
+const ideaInput = $("#ideaInput");
+const generateBtn = $("#generateBtn");
+const runtimeSelect = $("#runtimeSelect");
+const backendSelect = $("#backendSelect");
+const iterSlider = $("#iterSlider");
+const iterValue = $("#iterValue");
 
-    // ─── Toast helper ───
-    function toast(msg, kind) {
-        if (!toastHost) return;
-        const t = document.createElement("div");
-        t.className = "toast" + (kind ? " " + kind : "");
-        t.textContent = msg;
-        toastHost.appendChild(t);
-        requestAnimationFrame(() => t.classList.add("show"));
-        setTimeout(() => {
-            t.classList.remove("show");
-            setTimeout(() => t.remove(), 300);
-        }, 3200);
+// Building
+const buildStream = $("#buildStream");
+const planningStream = $("#planningStream");
+const inlineEditorArea = $("#inlineEditorArea");
+const inlineFileTabs = $("#inlineFileTabs");
+const inlineMonaco = $("#inlineMonaco");
+
+// Complete
+const fileTabs = $("#fileTabs");
+const monacoContainer = $("#monacoContainer");
+const completeSummary = $("#completeSummary");
+const downloadBtn = $("#downloadBtn");
+const iterateBtn = $("#iterateBtn");
+const iteratePanel = $("#iteratePanel");
+const iterateInput = $("#iterateInput");
+const iterateSubmitBtn = $("#iterateSubmitBtn");
+
+// Preview
+const launchPreviewBtn = $("#launchPreviewBtn");
+const stopPreviewBtn = $("#stopPreviewBtn");
+const refreshPreviewBtn = $("#refreshPreviewBtn");
+const previewFrame = $("#previewFrame");
+const previewOverlay = $("#previewOverlay");
+
+// Sidebar
+const providerSelect = $("#providerSelect");
+const modelSelect = $("#modelSelect");
+const providerBadge = $("#providerBadge");
+const manageKeysBtn = $("#manageKeysBtn");
+const sessionList = $("#sessionList");
+const memorySection = $("#memorySection");
+const memoryList = $("#memoryList");
+const memoryCount = $("#memoryCount");
+const newSessionBtn = $("#newSessionBtn");
+const sidebarToggle = $("#sidebarToggle");
+
+// Status
+const buildTimer = $("#buildTimer");
+const iterationBadge = $("#iterationBadge");
+
+// Modal
+const keysModal = $("#keysModal");
+const keysList = $("#keysList");
+
+// ── Utilities ──
+function escape(s) {
+    if (!s) return "";
+    const d = document.createElement("div");
+    d.textContent = String(s);
+    return d.innerHTML;
+}
+
+function fmtMs(ms) {
+    if (ms < 1000) return (ms / 1000).toFixed(1) + "s";
+    if (ms < 60000) return (ms / 1000).toFixed(1) + "s";
+    const m = Math.floor(ms / 60000);
+    const s = ((ms % 60000) / 1000).toFixed(0);
+    return `${m}m ${s}s`;
+}
+
+function toast(msg, type = "info") {
+    const el = document.createElement("div");
+    el.className = `toast ${type}`;
+    el.textContent = msg;
+    toastHost.appendChild(el);
+    requestAnimationFrame(() => el.classList.add("show"));
+    setTimeout(() => {
+        el.classList.remove("show");
+        setTimeout(() => el.remove(), 300);
+    }, 4000);
+}
+
+function genId() {
+    return crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2);
+}
+
+// ── Phase Management ──
+function setPhase(phase) {
+    if (phase === currentPhase) return;
+    currentPhase = phase;
+    $$(".phase").forEach((el) => el.classList.remove("active"));
+    const target = $(`#phase${phase.charAt(0).toUpperCase() + phase.slice(1)}`);
+    if (target) target.classList.add("active");
+
+    if (phase === "ideation") {
+        statusBar.classList.remove("visible");
+    } else {
+        statusBar.classList.add("visible");
     }
 
-    function escape(s) {
-        return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-    }
+    updateTabTitle();
+}
 
-    function fmtMs(ms) {
-        if (ms == null) return "";
-        if (ms < 1000) return ms + "ms";
-        return (ms / 1000).toFixed(1) + "s";
-    }
+function updateTabTitle() {
+    const base = "AI Dev Agent";
+    if (currentPhase === "building") document.title = `(Building...) ${base}`;
+    else if (currentPhase === "complete") document.title = `(Done!) ${base}`;
+    else document.title = base;
+}
 
-    // ─── Left Panel Tabs ───
-    document.querySelectorAll(".left-tab-btn").forEach((btn) => {
-        btn.addEventListener("click", () => {
-            document.querySelectorAll(".left-tab-btn").forEach((b) => b.classList.remove("active"));
-            document.querySelectorAll(".left-tab-content").forEach((c) => c.classList.remove("active"));
-            btn.classList.add("active");
-            document.getElementById(btn.dataset.leftTarget).classList.add("active");
-        });
-    });
+// ── Progress Stepper ──
+const AGENTS_ORDER = ["planner", "developer", "designer", "tester", "reviewer"];
 
-    // ─── Advanced Toggle ───
-    const advancedToggle = document.getElementById("advancedToggle");
-    const advancedContent = document.getElementById("advancedContent");
-    advancedToggle.addEventListener("click", () => {
-        advancedToggle.classList.toggle("open");
-        advancedContent.classList.toggle("open");
-    });
+function setStepState(agent, state) {
+    const step = $(`.step[data-agent="${agent}"]`);
+    if (!step) return;
+    step.classList.remove("running", "done");
+    if (state) step.classList.add(state);
 
-    // ─── Chat ───
-    async function sendChat() {
-        const msg = chatInput.value.trim();
-        if (!msg || !sessionId) return;
-        chatInput.value = "";
-        chatSendBtn.disabled = true;
-
-        const userBubble = document.createElement("div");
-        userBubble.className = "chat-bubble user";
-        userBubble.textContent = msg;
-        chatMessages.appendChild(userBubble);
-        chatMessages.scrollTop = chatMessages.scrollHeight;
-
-        try {
-            const res = await fetch(`/chat/${sessionId}`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ message: msg }),
-            });
-            const data = await res.json();
-            const assistantBubble = document.createElement("div");
-            assistantBubble.className = "chat-bubble assistant";
-            assistantBubble.textContent = data.response || data.message || "No response";
-            chatMessages.appendChild(assistantBubble);
-            chatMessages.scrollTop = chatMessages.scrollHeight;
-
-            if (data.should_iterate) {
-                toast("Chat triggered an iteration", "info");
-                resetUI(true);
-                connectSSE();
-            }
-        } catch (e) {
-            const errBubble = document.createElement("div");
-            errBubble.className = "chat-bubble assistant";
-            errBubble.textContent = "Error: could not reach the server.";
-            chatMessages.appendChild(errBubble);
-        }
-        chatSendBtn.disabled = false;
-    }
-
-    chatSendBtn.addEventListener("click", sendChat);
-    chatInput.addEventListener("keydown", (e) => {
-        if (e.key === "Enter" && !e.shiftKey) {
-            e.preventDefault();
-            sendChat();
-        }
-    });
-
-    // ─── Memory manager ───
-    async function fetchMemories() {
-        if (!sessionId) return;
-        try {
-            const res = await fetch(`/memory?session_id=${sessionId}`);
-            if (!res.ok) return;
-            const data = await res.json();
-            const memories = data.memories || [];
-            if (memories.length === 0) {
-                memorySection.style.display = "none";
-                return;
-            }
-            memorySection.style.display = "";
-            memoryCards.innerHTML = "";
-            memories.slice(0, 8).forEach((m) => {
-                const card = document.createElement("div");
-                card.className = "memory-card";
-                const score = m.relevance_score != null
-                    ? `<span class="memory-score" title="relevance">${Number(m.relevance_score).toFixed(2)}</span>`
-                    : "";
-                card.innerHTML =
-                    `<div class="memory-body"><span class="memory-key">${escape(m.key || m.category)}:</span> ${escape(m.value)}</div>` +
-                    `<div class="memory-meta">${score}` +
-                    `<button class="memory-del" title="Forget" data-id="${m.id}">✕</button></div>`;
-                memoryCards.appendChild(card);
-            });
-            memoryCards.querySelectorAll(".memory-del").forEach((b) => {
-                b.onclick = async () => {
-                    const id = b.dataset.id;
-                    if (!id) return;
-                    const r = await fetch(`/memory/${id}`, { method: "DELETE" });
-                    if (r.ok) {
-                        toast("Memory forgotten", "info");
-                        fetchMemories();
-                    }
-                };
-            });
-        } catch (e) {
-            /* silent */
+    const idx = AGENTS_ORDER.indexOf(agent);
+    if (idx > 0) {
+        const line = $(`.step-line[data-after="${AGENTS_ORDER[idx - 1]}"]`);
+        if (line) {
+            line.classList.remove("done", "active");
+            if (state === "done") line.classList.add("done");
+            else if (state === "running") line.classList.add("active");
         }
     }
+}
 
-    // ─── Version Timeline ───
-    async function fetchHistory() {
-        if (!sessionId) return;
-        const res = await fetch(`/history/${sessionId}`);
-        if (!res.ok) return;
-        const data = await res.json();
-        const versions = data.versions || [];
-        if (versions.length === 0) {
-            versionTimeline.style.display = "none";
-            return;
-        }
-        versionTimeline.style.display = "";
-        timelineTrack.innerHTML = "";
-        versions.forEach((v, i) => {
-            if (i > 0) {
-                const line = document.createElement("div");
-                line.className = "timeline-line" + (v.is_current ? "" : " filled");
-                timelineTrack.appendChild(line);
-            }
-            const dot = document.createElement("div");
-            dot.className = "timeline-dot" + (v.is_current ? " active" : "");
-            const trig = v.trigger ? ` · ${v.trigger}` : "";
-            dot.title = `v${v.version}${trig}: ${v.description || ""}`;
-            dot.onclick = () => checkoutVersion(v.version);
-            timelineTrack.appendChild(dot);
-        });
+function setStepTimer(agent, text) {
+    const el = $(`#timer-${agent}`);
+    if (el) el.textContent = text;
+}
+
+function resetStepper() {
+    AGENTS_ORDER.forEach((a) => {
+        setStepState(a, null);
+        setStepTimer(a, "");
+    });
+}
+
+// ── Build Timer ──
+function startBuildTimer() {
+    buildStartTime = performance.now();
+    buildTimer.textContent = "0.0s";
+    buildTimerInterval = setInterval(() => {
+        buildTimer.textContent = fmtMs(performance.now() - buildStartTime);
+    }, 100);
+}
+
+function stopBuildTimer() {
+    if (buildTimerInterval) clearInterval(buildTimerInterval);
+    buildTimerInterval = null;
+}
+
+// ── Agent Thinking Blocks ──
+function createAgentBlock(agent, status = "running") {
+    const block = document.createElement("div");
+    block.className = "agent-block expanded";
+    block.dataset.agent = agent;
+    block.dataset.status = status;
+    block.innerHTML = `
+        <div class="agent-block-header">
+            <span class="agent-dot"></span>
+            <span class="agent-name">${escape(agent)}</span>
+            <span class="agent-status">${status === "running" ? "thinking..." : ""}</span>
+            <span class="agent-timer-text"></span>
+            <span class="agent-toggle">&#9662;</span>
+        </div>
+        <div class="agent-block-content">
+            <pre class="agent-stream"></pre>
+        </div>
+    `;
+    block.querySelector(".agent-block-header").onclick = () => {
+        block.classList.toggle("expanded");
+    };
+    return block;
+}
+
+function getActiveStream() {
+    if (currentPhase === "planning") return planningStream;
+    return buildStream;
+}
+
+// ── Plan Card ──
+function renderPlanCard(plan, targetEl) {
+    const card = document.createElement("div");
+    card.className = "plan-card";
+
+    const tasks = (plan.tasks || []).map(
+        (t) => `<div class="plan-task"><span class="plan-task-dot"></span><span>${escape(typeof t === "string" ? t : t.description || t.text || JSON.stringify(t))}</span></div>`
+    ).join("");
+
+    const files = (plan.files || []).map(
+        (f) => `<span class="plan-chip file">${escape(f)}</span>`
+    ).join("");
+
+    const techStack = (plan.tech_stack || []).map(
+        (t) => `<span class="plan-chip">${escape(t)}</span>`
+    ).join("");
+
+    card.innerHTML = `
+        <div class="plan-card-header">
+            <span class="plan-card-title">${escape(plan.app_name || "Your App")}</span>
+            <span class="plan-card-runtime">${escape(plan.runtime || "auto")}</span>
+        </div>
+        ${plan.architecture ? `<div class="plan-section"><span class="plan-label">Architecture</span><p class="plan-text">${escape(plan.architecture)}</p></div>` : ""}
+        ${techStack ? `<div class="plan-section"><span class="plan-label">Tech Stack</span><div class="plan-chips">${techStack}</div></div>` : ""}
+        ${tasks ? `<div class="plan-section"><span class="plan-label">Tasks</span><div class="plan-tasks">${tasks}</div></div>` : ""}
+        ${files ? `<div class="plan-section"><span class="plan-label">Files</span><div class="plan-chips">${files}</div></div>` : ""}
+        <div class="plan-actions">
+            <button class="btn-approve" id="btnApprovePlan">Approve & Build</button>
+            <button class="btn-reject" id="btnRejectPlan">Reject</button>
+        </div>
+    `;
+
+    targetEl.appendChild(card);
+
+    card.querySelector("#btnApprovePlan").onclick = () => approvePlan(card);
+    card.querySelector("#btnRejectPlan").onclick = () => rejectPlan(card);
+}
+
+async function approvePlan(card) {
+    card.querySelector(".plan-actions").innerHTML = `<span style="color:var(--accent-emerald);font-weight:600;">Approved — building...</span>`;
+    try {
+        await fetch(`/approve-plan/${sessionId}`, { method: "POST" });
+        setPhase("building");
+    } catch (err) {
+        toast("Failed to approve plan", "error");
     }
+}
 
-    // ─── Agent log filtering ───
-    document.querySelectorAll(".agent-node").forEach((n) => {
-        n.addEventListener("click", () => {
-            const agent = n.dataset.agent;
-            if (activeAgentFilter === agent) {
-                activeAgentFilter = null;
-                document.querySelectorAll(".agent-node").forEach((other) => (other.style.opacity = "1"));
-            } else {
-                activeAgentFilter = agent;
-                document.querySelectorAll(".agent-node").forEach((other) => (other.style.opacity = "0.4"));
-                n.style.opacity = "1";
-            }
-            document.querySelectorAll(".log-entry, .thinking-details").forEach((el) => {
-                if (!activeAgentFilter || el.dataset.agent === activeAgentFilter) el.style.display = "";
-                else el.style.display = "none";
-            });
-        });
-    });
+function rejectPlan(card) {
+    card.querySelector(".plan-actions").innerHTML = `<span style="color:var(--accent-rose);font-weight:600;">Rejected</span>`;
+    if (eventSource) eventSource.close();
+    toast("Plan rejected — modify your idea and try again", "info");
+    setTimeout(() => setPhase("ideation"), 1500);
+}
 
-    // ─── Init ───
-    fetch("/health")
-        .then((r) => r.json())
-        .then((d) => {
-            providerBadge.innerHTML = "⚡ " + d.provider;
-        })
-        .catch(() => {
-            providerBadge.textContent = "offline";
-        });
-    iterSlider.addEventListener("input", () => {
-        iterValue.textContent = iterSlider.value;
-    });
-
-    // ─── Panel resizing (gutters) ───
-    (function initResize() {
-        const gutters = [document.getElementById("gutterLeft"), document.getElementById("gutterRight")];
-        let dragging = null,
-            startX = 0,
-            startLeftW = 0,
-            startCenterW = 0;
-        const leftPanel = document.getElementById("leftPanel");
-        const centerPanel = document.getElementById("centerPanel");
-        const rightPanel = document.getElementById("rightPanel");
-
-        function onDown(which, e) {
-            dragging = which;
-            startX = e.clientX || (e.touches && e.touches[0].clientX);
-            startLeftW = leftPanel.getBoundingClientRect().width;
-            startCenterW = centerPanel.getBoundingClientRect().width;
-            rightPanel.getBoundingClientRect();
-            gutters[which === "left" ? 0 : 1].classList.add("active");
-        }
-        function onMove(e) {
-            if (!dragging) return;
-            const x = e.clientX || (e.touches && e.touches[0].clientX);
-            const delta = x - startX;
-            if (dragging === "left") {
-                appLayout.style.setProperty("--col-left", Math.max(200, startLeftW + delta) + "px");
-                appLayout.style.setProperty("--col-center", Math.max(300, startCenterW - delta) + "px");
-            } else {
-                appLayout.style.setProperty("--col-center", Math.max(300, startCenterW + delta) + "px");
-            }
-            if (editor) requestAnimationFrame(() => editor.layout());
-        }
-        function onUp() {
-            dragging = null;
-            gutters.forEach((g) => g.classList.remove("active"));
-        }
-        gutters[0].addEventListener("mousedown", (e) => onDown("left", e));
-        gutters[1].addEventListener("mousedown", (e) => onDown("right", e));
-        document.addEventListener("mousemove", onMove);
-        document.addEventListener("mouseup", onUp);
-    })();
-
-    // ─── Workspace tabs ───
-    document.querySelectorAll(".tab-btn").forEach((btn) => {
-        btn.addEventListener("click", () => {
-            document.querySelectorAll(".tab-btn").forEach((b) => b.classList.remove("active"));
-            document.querySelectorAll(".tab-content").forEach((c) => c.classList.remove("active"));
-            btn.classList.add("active");
-            document.getElementById(btn.dataset.target).classList.add("active");
-            if (btn.dataset.target === "codeContent" && editor) editor.layout();
-        });
-    });
-
-    // ─── Monaco ───
+// ── Monaco Editor ──
+function initMonaco(callback) {
+    if (window.monaco) { callback(); return; }
     require.config({ paths: { vs: "https://cdn.jsdelivr.net/npm/monaco-editor@0.52.0/min/vs" } });
-    require(["vs/editor/editor.main"], function () {
-        monaco.editor.defineTheme("tech-dark", {
+    require(["vs/editor/editor.main"], () => {
+        monaco.editor.defineTheme("studio-dark", {
             base: "vs-dark",
             inherit: true,
             rules: [],
-            colors: { "editor.background": "#121214", "editor.lineHighlightBackground": "#1f1f23" },
+            colors: { "editor.background": "#0a0a0c", "editor.lineHighlightBackground": "#1a1a1e" },
         });
+        callback();
     });
+}
 
-    function loadFiles(files) {
-        if (!window.monaco) {
-            setTimeout(() => loadFiles(files), 200);
-            return;
-        }
-        if (!editor) {
-            codePlaceholder.style.display = "none";
-            monacoContainer.style.display = "block";
-            editor = monaco.editor.create(monacoContainer, {
-                theme: "tech-dark",
+function loadFilesIntoEditor(files, container, tabsContainer, isInline = false) {
+    initMonaco(() => {
+        const models = isInline ? inlineModels : editorModels;
+
+        Object.values(models).forEach((m) => m.dispose());
+        if (isInline) inlineModels = {};
+        else editorModels = {};
+        tabsContainer.innerHTML = "";
+
+        if (!files || Object.keys(files).length === 0) return;
+
+        let currentEditor = isInline ? inlineEditor : editor;
+        if (!currentEditor) {
+            currentEditor = monaco.editor.create(container, {
+                theme: "studio-dark",
                 fontSize: 13,
                 minimap: { enabled: false },
-                fontFamily: "JetBrains Mono",
+                fontFamily: "JetBrains Mono, monospace",
                 automaticLayout: true,
+                padding: { top: 12 },
             });
-            editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, saveFiles);
+            if (isInline) inlineEditor = currentEditor;
+            else editor = currentEditor;
         }
-        Object.values(editorModels).forEach((m) => m.dispose());
-        editorModels = {};
-        fileTabs.innerHTML = "";
 
-        const mapExt = { py: "python", js: "javascript", html: "html", css: "css", json: "json", md: "markdown" };
+        const extMap = { py: "python", js: "javascript", jsx: "javascript", ts: "typescript", tsx: "typescript", html: "html", css: "css", json: "json", md: "markdown" };
         const names = Object.keys(files);
+        const targetModels = isInline ? inlineModels : editorModels;
+
         names.forEach((fname) => {
             const ext = fname.split(".").pop();
-            const lang = mapExt[ext] || "plaintext";
+            const lang = extMap[ext] || "plaintext";
             const model = monaco.editor.createModel(files[fname], lang, monaco.Uri.parse("file:///" + fname));
-            editorModels[fname] = model;
-            model.onDidChangeContent(() => {
-                const tab = document.querySelector(`[data-file="${fname}"]`);
-                if (tab) tab.classList.add("unsaved");
-            });
+            targetModels[fname] = model;
+
             const tab = document.createElement("div");
             tab.className = "file-tab";
             tab.textContent = fname;
             tab.dataset.file = fname;
-            tab.onclick = () => switchFile(fname);
-            fileTabs.appendChild(tab);
+            tab.onclick = () => switchFileInEditor(fname, tabsContainer, currentEditor, targetModels);
+            tabsContainer.appendChild(tab);
         });
-        if (names.length) switchFile(names[0]);
-    }
 
-    function switchFile(fname) {
-        activeFile = fname;
-        editor.setModel(editorModels[fname]);
-        document.querySelectorAll(".file-tab").forEach((t) => t.classList.toggle("active", t.dataset.file === fname));
-    }
+        if (names.length) switchFileInEditor(names[0], tabsContainer, currentEditor, targetModels);
+    });
+}
 
-    async function saveFiles() {
-        if (!sessionId || !editor) return;
-        const payload = {};
-        for (const [f, m] of Object.entries(editorModels)) payload[f] = m.getValue();
-        document.querySelectorAll(".unsaved").forEach((t) => t.classList.remove("unsaved"));
-        saveStatus.classList.add("visible");
-        setTimeout(() => saveStatus.classList.remove("visible"), 2000);
-        await fetch(`/files/${sessionId}`, {
-            method: "PUT",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ files: payload }),
-        });
-        toast("Saved & hot-reloaded", "info");
-    }
+function switchFileInEditor(fname, tabsContainer, ed, models) {
+    tabsContainer.querySelectorAll(".file-tab").forEach((t) => t.classList.remove("active"));
+    const tab = tabsContainer.querySelector(`[data-file="${fname}"]`);
+    if (tab) tab.classList.add("active");
+    if (models[fname] && ed) ed.setModel(models[fname]);
+}
 
-    // ─── Build timer ───
-    function startBuildTimer() {
-        buildStartTime = performance.now();
-        if (buildTimer) buildTimer.classList.add("visible");
-        clearInterval(buildTimerInterval);
-        buildTimerInterval = setInterval(() => {
-            if (buildTimer && buildStartTime != null) {
-                buildTimer.textContent = "⏱ " + fmtMs(performance.now() - buildStartTime);
-            }
-        }, 100);
-    }
-    function stopBuildTimer() {
-        clearInterval(buildTimerInterval);
-        if (buildTimer && buildStartTime != null) {
-            buildTimer.textContent = "⏱ " + fmtMs(performance.now() - buildStartTime);
+// ── SSE Connection ──
+function connectSSE() {
+    if (eventSource) eventSource.close();
+    eventSource = new EventSource(`/stream/${sessionId}`);
+    let currentBlock = null;
+    let currentAgent = "";
+
+    eventSource.onmessage = ({ data }) => {
+        let ev;
+        try { ev = JSON.parse(data); } catch { return; }
+
+        switch (ev.event) {
+            case "agent_start":
+                handleAgentStart(ev);
+                currentAgent = ev.agent;
+                currentBlock = createAgentBlock(ev.agent);
+                getActiveStream().appendChild(currentBlock);
+                getActiveStream().scrollTop = getActiveStream().scrollHeight;
+                break;
+
+            case "llm_chunk":
+                if (currentBlock && ev.agent === currentAgent) {
+                    const stream = currentBlock.querySelector(".agent-stream");
+                    if (stream) {
+                        stream.textContent += ev.chunk;
+                        stream.scrollTop = stream.scrollHeight;
+                    }
+                }
+                break;
+
+            case "agent_complete":
+                handleAgentComplete(ev, currentBlock);
+                currentBlock = null;
+                break;
+
+            case "agent_output":
+                handleAgentOutput(ev);
+                break;
+
+            case "plan_ready":
+                handlePlanReady(ev.data || ev);
+                break;
+
+            case "files_update":
+                handleFilesUpdate(ev);
+                break;
+
+            case "pipeline_done":
+                handlePipelineDone(ev);
+                break;
+
+            case "error":
+                handleError(ev);
+                break;
         }
-    }
-
-    function setAgentTimer(agent, text) {
-        const node = document.getElementById(`node-${agent}`);
-        if (!node) return;
-        let el = node.querySelector(".agent-timer");
-        if (!el) {
-            el = document.createElement("div");
-            el.className = "agent-timer";
-            node.appendChild(el);
-        }
-        el.textContent = text;
-    }
-
-    // ─── Action handlers ───
-    generateBtn.onclick = async () => {
-        const idea = ideaInput.value.trim();
-        if (!idea) return;
-        generateBtn.disabled = true;
-        generateBtn.textContent = "Initializing...";
-        resetUI();
-        startBuildTimer();
-        const resp = await fetch("/generate", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-                idea,
-                runtime: runtimeSelect.value,
-                max_iterations: parseInt(iterSlider.value, 10),
-                backend: document.getElementById("backendSelect").value,
-            }),
-        });
-        const data = await resp.json();
-        sessionId = data.session_id;
-        sessionIdEl.textContent = sessionId;
-        sessionInfo.classList.add("visible");
-        connectSSE();
     };
 
-    iterateBtn.onclick = async () => {
-        const feedback = iterateInput.value.trim();
-        if (!feedback) return;
-        iterateBtn.disabled = true;
-        generateBtn.disabled = true;
-        resetUI(true);
+    eventSource.onerror = () => {
+        console.warn("SSE connection lost");
+    };
+}
+
+function handleAgentStart(ev) {
+    setStepState(ev.agent, "running");
+    agentTimes[ev.agent] = { start: performance.now() };
+    setStepTimer(ev.agent, "...");
+}
+
+function handleAgentComplete(ev, block) {
+    setStepState(ev.agent, "done");
+    const rec = agentTimes[ev.agent];
+    if (rec && rec.start != null) {
+        rec.elapsed = performance.now() - rec.start;
+        setStepTimer(ev.agent, fmtMs(rec.elapsed));
+    }
+
+    if (block) {
+        block.dataset.status = "done";
+        block.classList.remove("expanded");
+        const statusEl = block.querySelector(".agent-status");
+        if (statusEl) statusEl.textContent = rec ? fmtMs(rec.elapsed) : "done";
+        const timerEl = block.querySelector(".agent-timer-text");
+        if (timerEl) timerEl.textContent = "";
+    }
+}
+
+function handleAgentOutput(ev) {
+    if (ev.agent === "developer" && ev.data && ev.data.files_generated) {
+        const count = Array.isArray(ev.data.files_generated) ? ev.data.files_generated.length : Object.keys(ev.data.files_generated).length;
+        const summary = document.createElement("div");
+        summary.className = "agent-summary";
+        summary.innerHTML = `<span class="file-count">${count} files</span> generated`;
+        getActiveStream().appendChild(summary);
+    }
+}
+
+function handlePlanReady(plan) {
+    setStepState("planner", "done");
+    const rec = agentTimes["planner"];
+    if (rec && rec.start) {
+        rec.elapsed = performance.now() - rec.start;
+        setStepTimer("planner", fmtMs(rec.elapsed));
+    }
+
+    setPhase("planning");
+    renderPlanCard(plan, planningStream);
+}
+
+function handleFilesUpdate(ev) {
+    if (!ev.files || Object.keys(ev.files).length === 0) return;
+
+    if (currentPhase === "building") {
+        inlineEditorArea.style.display = "flex";
+        const count = Object.keys(ev.files).length;
+        $("#inlineFileCount").textContent = `${count} file${count > 1 ? "s" : ""}`;
+        loadFilesIntoEditor(ev.files, inlineMonaco, inlineFileTabs, true);
+    }
+}
+
+function handlePipelineDone(ev) {
+    stopBuildTimer();
+
+    const files = ev.files;
+    if (files && Object.keys(files).length > 0) {
+        transitionToComplete(files, ev);
+    } else {
+        fetch(`/files/${sessionId}`)
+            .then((r) => r.json())
+            .then((data) => {
+                if (data.files && Object.keys(data.files).length > 0) {
+                    transitionToComplete(data.files, ev);
+                } else {
+                    toast("Build complete but no files were generated", "error");
+                    setPhase("ideation");
+                }
+            })
+            .catch(() => {
+                toast("Build complete but failed to load files", "error");
+            });
+    }
+
+    if (eventSource) eventSource.close();
+    notifyBuildComplete();
+}
+
+function transitionToComplete(files, ev) {
+    setPhase("complete");
+
+    const totalTime = buildStartTime ? fmtMs(performance.now() - buildStartTime) : "";
+    completeSummary.innerHTML = `
+        <span class="summary-status">Build complete ${totalTime ? `(${totalTime})` : ""}</span>
+        <span class="summary-agents">${AGENTS_ORDER.map((a) => `<span style="color:var(--agent-${a})">&#10003; ${a}</span>`).join(" ")}</span>
+    `;
+
+    loadFilesIntoEditor(files, monacoContainer, fileTabs, false);
+    launchPreviewBtn.disabled = false;
+    downloadBtn.disabled = false;
+}
+
+function handleError(ev) {
+    stopBuildTimer();
+    toast(ev.message || "Pipeline error", "error");
+    if (eventSource) eventSource.close();
+}
+
+// ── Notifications ──
+function notifyBuildComplete() {
+    updateTabTitle();
+    if ("Notification" in window && Notification.permission === "granted") {
+        new Notification("Build Complete", { body: "Your app is ready to preview." });
+    }
+}
+
+function requestNotificationPermission() {
+    if ("Notification" in window && Notification.permission === "default") {
+        Notification.requestPermission();
+    }
+}
+
+// ── Generate ──
+async function handleGenerate() {
+    const idea = ideaInput.value.trim();
+    if (!idea) { toast("Enter an app idea", "error"); return; }
+
+    sessionId = genId();
+    generateBtn.disabled = true;
+
+    resetStepper();
+    planningStream.innerHTML = "";
+    buildStream.innerHTML = "";
+    inlineEditorArea.style.display = "none";
+
+    const provider = providerSelect.value;
+    const model = modelSelect.value;
+
+    const body = {
+        idea,
+        runtime: runtimeSelect.value,
+        max_iterations: parseInt(iterSlider.value),
+        backend: backendSelect.value,
+        provider: provider || undefined,
+        model: model || undefined,
+        client_id: getClientId(),
+    };
+
+    try {
+        const res = await fetch("/generate", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+        });
+        const data = await res.json();
+        sessionId = data.session_id;
+
+        addSessionToList(sessionId, idea);
+        setPhase("planning");
         startBuildTimer();
+        statusBar.classList.add("visible");
+        connectSSE();
+        requestNotificationPermission();
+    } catch (err) {
+        toast("Failed to start generation: " + err.message, "error");
+    } finally {
+        generateBtn.disabled = false;
+    }
+}
+
+// ── Iterate ──
+async function handleIterate() {
+    const feedback = iterateInput.value.trim();
+    if (!feedback) { toast("Enter feedback", "error"); return; }
+
+    iterateSubmitBtn.disabled = true;
+    setPhase("building");
+    buildStream.innerHTML = "";
+    inlineEditorArea.style.display = "none";
+    resetStepper();
+    startBuildTimer();
+
+    try {
         await fetch(`/iterate/${sessionId}`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ feedback }),
+            body: JSON.stringify({ feedback, client_id: getClientId() }),
         });
         connectSSE();
-    };
+    } catch (err) {
+        toast("Iterate failed: " + err.message, "error");
+    } finally {
+        iterateSubmitBtn.disabled = false;
+        iteratePanel.style.display = "none";
+    }
+}
 
-    function resetUI(keepSession) {
-        eventLog.innerHTML = "";
-        terminalOutput.innerHTML = "";
-        completedAgents = 0;
-        document.querySelectorAll(".agent-node").forEach((n) => {
-            n.classList.remove("running", "done");
-            const t = n.querySelector(".agent-timer");
-            if (t) t.remove();
+// ── Sidebar: Sessions ──
+function addSessionToList(id, idea) {
+    const empty = sessionList.querySelector(".session-empty");
+    if (empty) empty.remove();
+
+    const item = document.createElement("div");
+    item.className = "session-item active";
+    item.innerHTML = `<span class="session-dot"></span><span>${escape(idea.substring(0, 30))}${idea.length > 30 ? "..." : ""}</span>`;
+
+    sessionList.querySelectorAll(".session-item").forEach((i) => i.classList.remove("active"));
+    sessionList.prepend(item);
+}
+
+// ── Sidebar: Config ──
+async function loadConfig() {
+    try {
+        const res = await fetch("/config");
+        const cfg = await res.json();
+
+        providerSelect.innerHTML = "";
+        (cfg.providers || []).forEach((p) => {
+            const opt = document.createElement("option");
+            opt.value = p.id;
+            opt.textContent = p.name;
+            providerSelect.appendChild(opt);
         });
-        document.querySelectorAll(".agent-tasks").forEach((el) => (el.innerHTML = ""));
-        document.querySelectorAll(".agent-status-item").forEach((el) => el.classList.remove("running", "done"));
-        currentStreamAgent = null;
-        currentDetails = null;
-        currentDetailsContent = null;
-        for (const k of Object.keys(agentTimes)) delete agentTimes[k];
+
+        updateModels(cfg);
+        providerBadge.textContent = `${cfg.default_provider || "gemini"} / ${cfg.default_model || "flash"}`;
+    } catch {
+        providerBadge.textContent = "Config unavailable";
     }
+}
 
-    // ─── Test-case explorer ───
-    function renderTestExplorer(data) {
-        const cases = data.test_cases || [];
-        const passed = data.passed != null ? data.passed : data.passed_count;
-        const failed = data.failed != null ? data.failed : data.failed_count;
-        const el = document.createElement("div");
-        el.className = "log-entry test-explorer";
-        el.dataset.agent = "tester";
-        if (activeAgentFilter && activeAgentFilter !== "tester") el.style.display = "none";
-        const summary = escape(data.summary || data.output_summary || "");
-        const rows = cases
-            .map(
-                (c) =>
-                    `<li class="tc ${c.passed ? "pass" : "fail"}"><span class="tc-dot"></span>` +
-                    `<span class="tc-name">${escape(c.name)}</span>` +
-                    (c.error_message ? `<span class="tc-err">${escape(c.error_message)}</span>` : "") +
-                    `</li>`
-            )
-            .join("");
-        el.innerHTML =
-            `<div class="log-header"><span class="agent-tag tester">tester</span>` +
-            `<span class="tc-counts"><span class="pass-text">✓ ${passed || 0}</span> ` +
-            `<span class="fail-text">✗ ${failed || 0}</span></span></div>` +
-            (cases.length
-                ? `<details class="tc-details" open><summary>${cases.length} test case(s)</summary><ul class="tc-list">${rows}</ul></details>`
-                : `<div class="log-content">${summary}</div>`);
-        eventLog.appendChild(el);
-        eventLog.scrollTop = eventLog.scrollHeight;
-    }
-
-    // ─── SSE & streaming ───
-    function connectSSE() {
-        if (eventSource) eventSource.close();
-        eventSource = new EventSource(`/stream/${sessionId}`);
-        let currentChunkBuffer = "";
-
-        eventSource.onmessage = ({ data }) => {
-            const ev = JSON.parse(data);
-
-            if (ev.event === "agent_start") {
-                document.getElementById(`node-${ev.agent}`).classList.add("running");
-                const statusItem = document.getElementById(`status-${ev.agent}`);
-                if (statusItem) statusItem.classList.add("running");
-                currentStreamAgent = ev.agent;
-                currentChunkBuffer = "";
-
-                agentTimes[ev.agent] = { start: performance.now() };
-                setAgentTimer(ev.agent, "running…");
-
-                const details = document.createElement("details");
-                details.className = "thinking-details";
-                details.dataset.agent = ev.agent;
-                details.open = true;
-                if (activeAgentFilter && activeAgentFilter !== ev.agent) details.style.display = "none";
-
-                const summary = document.createElement("summary");
-                summary.className = "thinking-summary";
-                summary.innerHTML = `<span class="stream-indicator" style="background:var(--agent-${ev.agent});"></span> ${ev.agent} is thinking...`;
-
-                const content = document.createElement("div");
-                content.className = "thinking-content";
-
-                details.appendChild(summary);
-                details.appendChild(content);
-                eventLog.appendChild(details);
-                eventLog.scrollTop = eventLog.scrollHeight;
-
-                currentDetails = details;
-                currentDetailsContent = content;
-            } else if (ev.event === "llm_chunk") {
-                if (ev.agent === currentStreamAgent && currentDetailsContent) {
-                    currentChunkBuffer += ev.chunk;
-                    currentDetailsContent.textContent = currentChunkBuffer;
-                    eventLog.scrollTop = eventLog.scrollHeight;
-                }
-            } else if (ev.event === "agent_complete") {
-                const node = document.getElementById(`node-${ev.agent}`);
-                node.classList.remove("running");
-                node.classList.add("done");
-                completedAgents++;
-                const statusItem = document.getElementById(`status-${ev.agent}`);
-                if (statusItem) {
-                    statusItem.classList.remove("running");
-                    statusItem.classList.add("done");
-                }
-                const rec = agentTimes[ev.agent];
-                if (rec && rec.start != null) {
-                    rec.elapsedMs = performance.now() - rec.start;
-                    setAgentTimer(ev.agent, fmtMs(rec.elapsedMs));
-                }
-                if (currentDetails) {
-                    currentDetails.querySelector(".thinking-summary").innerHTML = `${ev.agent} reasoning`;
-                    currentDetails.open = false;
-                    currentDetails = null;
-                    currentDetailsContent = null;
-                }
-            } else if (ev.event === "tasks") {
-                const container = document.getElementById(`tasks-${ev.agent}`);
-                if (container) {
-                    container.innerHTML = "";
-                    ev.tasks.forEach((t) => {
-                        const item = document.createElement("div");
-                        item.className = "task-item";
-                        item.id = `task-${ev.agent}-${t.id}`;
-                        item.innerHTML = `<span class="task-check"></span><span class="task-text">${escape(t.text)}</span>`;
-                        container.appendChild(item);
-                    });
-                    const first = container.querySelector(".task-item");
-                    if (first) first.classList.add("active");
-                }
-            } else if (ev.event === "task_done") {
-                const item = document.getElementById(`task-${ev.agent}-${ev.task_id}`);
-                if (item) {
-                    item.classList.remove("active");
-                    item.classList.add("done");
-                    const next = item.nextElementSibling;
-                    if (next && !next.classList.contains("done")) next.classList.add("active");
-                }
-            } else if (ev.event === "task_update") {
-                const item = document.getElementById(`task-${ev.agent}-${ev.task_id}`);
-                if (item) {
-                    const textEl = item.querySelector(".task-text");
-                    if (textEl) textEl.textContent = ev.text;
-                }
-            } else if (ev.event === "agent_output") {
-                if (ev.agent === "tester" && ev.data && ("test_cases" in ev.data || "passed" in ev.data)) {
-                    renderTestExplorer(ev.data);
-                } else {
-                    appendLog(ev.agent, ev.data);
-                }
-            } else if (ev.event === "terminal") {
-                appendTerminal(ev.data.source, ev.data.text);
-            } else if (ev.event === "preview_reload") {
-                if (previewFrame && previewFrame.src && previewFrame.src !== "about:blank") {
-                    previewFrame.src = previewFrame.src;
-                }
-            } else if (ev.event === "pipeline_done") {
-                loadFiles(ev.files);
-                generateBtn.disabled = false;
-                generateBtn.textContent = "Initialize Build";
-                iterateSection.classList.add("visible");
-                iterateBtn.disabled = false;
-                downloadBtn.classList.add("enabled");
-                document.getElementById("launchPreviewBtn").disabled = false;
-                stopBuildTimer();
-                fetchHistory();
-                fetchMemories();
-                toast("Build complete — " + fmtMs(buildStartTime != null ? performance.now() - buildStartTime : 0), "success");
-                eventSource.close();
-            } else if (ev.event === "error") {
-                appendLog("system", { error: ev.message });
-                generateBtn.disabled = false;
-                generateBtn.textContent = "Initialize Build";
-                stopBuildTimer();
-                toast("Pipeline error", "error");
-                eventSource.close();
-            }
-        };
-    }
-
-    function appendTerminal(source, text) {
-        const l = document.createElement("div");
-        l.innerHTML = `<span class="term-src ${escape(source)}">[${escape(source)}]</span> ${escape(text)}`;
-        terminalOutput.appendChild(l);
-        terminalOutput.scrollTop = terminalOutput.scrollHeight;
-    }
-
-    function appendLog(agent, data) {
-        const el = document.createElement("div");
-        el.className = "log-entry";
-        el.dataset.agent = agent;
-        if (activeAgentFilter && activeAgentFilter !== agent) el.style.display = "none";
-        const keys = Object.keys(data)
-            .map((k) => `<li><strong>${escape(k)}:</strong> ${escape(JSON.stringify(data[k]).substring(0, 150))}</li>`)
-            .join("");
-        el.innerHTML = `<div class="log-header"><span class="agent-tag ${agent}">${agent}</span></div>
-                        <div class="log-content"><ul>${keys}</ul></div>`;
-        eventLog.appendChild(el);
-        eventLog.scrollTop = eventLog.scrollHeight;
-    }
-
-    async function checkoutVersion(version) {
-        if (!sessionId) return;
-        const res = await fetch(`/checkout/${sessionId}/${version}`, { method: "POST" });
-        if (res.ok) {
-            const data = await res.json();
-            loadFiles(data.files);
-            fetchHistory();
-            toast("Checked out v" + version, "info");
-        }
-    }
-
-    // ─── Preview actions (with real error surfacing) ───
-    const btnPlay = document.getElementById("launchPreviewBtn");
-    const btnStop = document.getElementById("stopPreviewBtn");
-    const btnRef = document.getElementById("refreshPreviewBtn");
-
-    function hideBanner() {
-        if (previewBanner) {
-            previewBanner.style.display = "none";
-            previewBanner.textContent = "";
-        }
-    }
-    function showBanner(msg) {
-        if (previewBanner) {
-            previewBanner.textContent = msg;
-            previewBanner.style.display = "block";
-        }
-    }
-
-    btnPlay.onclick = async () => {
-        btnPlay.disabled = true;
-        hideBanner();
-        previewOverlay.textContent = "Booting preview…";
-        previewOverlay.classList.remove("hidden");
-        previewOverlay.style.display = "";
-        try {
-            const r = await fetch(`/preview/${sessionId}/start`, { method: "POST" });
-            if (r.ok) {
-                previewFrame.style.display = "block";
-                previewFrame.src = `/preview/${sessionId}/`;
-                previewOverlay.style.display = "none";
-                btnStop.disabled = false;
-                btnRef.disabled = false;
-            } else {
-                // Surface the REAL backend error (captured stderr), not a generic message.
-                let detail = `Preview failed (HTTP ${r.status})`;
-                try {
-                    const body = await r.json();
-                    if (body && body.detail) detail = body.detail;
-                } catch (e) {
-                    /* non-JSON */
-                }
-                previewOverlay.style.display = "none";
-                showBanner("⚠ " + detail);
-                appendTerminal("preview", detail);
-                toast("Preview failed to start", "error");
-                btnPlay.disabled = false;
-            }
-        } catch (e) {
-            previewOverlay.style.display = "none";
-            showBanner("⚠ Could not reach the server: " + e);
-            btnPlay.disabled = false;
-        }
-    };
-
-    btnStop.onclick = async () => {
-        await fetch(`/preview/${sessionId}/stop`, { method: "POST" });
-        previewFrame.src = "about:blank";
-        previewFrame.style.display = "none";
-        previewOverlay.textContent = "Preview inactive";
-        previewOverlay.style.display = "";
-        previewOverlay.classList.remove("hidden");
-        hideBanner();
-        btnStop.disabled = true;
-        btnRef.disabled = true;
-        btnPlay.disabled = false;
-    };
-
-    btnRef.onclick = () => {
-        if (previewFrame.src) previewFrame.src = previewFrame.src;
-    };
-
-    // ─── In-iframe console capture → terminal + banner ───
-    window.addEventListener("message", (e) => {
-        const d = e.data;
-        if (!d || d.type !== "console") return;
-        appendTerminal("console", `[${d.level}] ${d.msg}`);
-        if (d.level === "error") showBanner("⚠ Runtime error in preview: " + d.msg);
+function updateModels(cfg) {
+    modelSelect.innerHTML = "";
+    const provider = providerSelect.value;
+    const models = (cfg.providers || []).find((p) => p.id === provider)?.models || [];
+    models.forEach((m) => {
+        const opt = document.createElement("option");
+        opt.value = m.id;
+        opt.textContent = m.name;
+        modelSelect.appendChild(opt);
     });
+}
 
-    // ─── Export & misc ───
-    downloadBtn.onclick = () => {
-        if (sessionId) window.location.href = `/download/${sessionId}`;
-    };
-    document.getElementById("terminalClearBtn").onclick = () => {
-        terminalOutput.innerHTML = "";
-    };
-    document.getElementById("copySession").onclick = () => {
-        if (!sessionId) return;
-        navigator.clipboard.writeText(sessionId);
-        toast("Session ID copied", "info");
-    };
+// ── Keys Modal ──
+function openKeysModal() {
+    keysModal.showModal();
+    loadKeysList();
+}
+
+async function loadKeysList() {
+    try {
+        const res = await fetch("/providers");
+        const data = await res.json();
+        keysList.innerHTML = (data.providers || []).map((p) => `
+            <div style="display:flex;align-items:center;gap:8px;padding:8px;background:var(--bg-surface-raised);border-radius:var(--radius-sm);">
+                <span style="flex:1;font-size:var(--text-sm);">${escape(p.name)}</span>
+                <span style="font-size:var(--text-xs);color:${p.has_key ? "var(--accent-emerald)" : "var(--text-muted)"};">${p.has_key ? "Saved" : "Not set"}</span>
+                <input type="password" placeholder="API key" style="flex:1;padding:4px 8px;background:var(--bg-input);border:1px solid var(--border-default);border-radius:4px;font-size:var(--text-xs);" data-provider="${p.id}">
+                <button class="btn-sm" onclick="window._saveKey('${p.id}', this)">Save</button>
+            </div>
+        `).join("");
+    } catch {
+        keysList.innerHTML = "<p style='color:var(--text-muted);font-size:var(--text-sm);'>Failed to load providers</p>";
+    }
+}
+
+window._saveKey = async function (provider, btn) {
+    const input = btn.previousElementSibling;
+    const key = input.value.trim();
+    if (!key) return;
+    try {
+        await fetch(`/providers/${provider}/key`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ api_key: key, client_id: getClientId() }),
+        });
+        input.value = "";
+        toast("Key saved", "success");
+        loadKeysList();
+    } catch {
+        toast("Failed to save key", "error");
+    }
+};
+
+// ── Memories ──
+async function loadMemories() {
+    if (!sessionId) return;
+    try {
+        const res = await fetch(`/memory/${sessionId}`);
+        const data = await res.json();
+        const memories = data.memories || [];
+        if (memories.length === 0) { memorySection.style.display = "none"; return; }
+
+        memorySection.style.display = "block";
+        memoryCount.textContent = memories.length;
+        memoryList.innerHTML = memories.slice(0, 5).map((m) =>
+            `<div class="memory-item"><strong>${escape(m.key)}</strong>: ${escape(m.value)}</div>`
+        ).join("");
+    } catch {
+        memorySection.style.display = "none";
+    }
+}
+
+// ── Preview ──
+async function startPreview() {
+    if (!sessionId) return;
+    launchPreviewBtn.disabled = true;
+    try {
+        const res = await fetch(`/preview/${sessionId}/start`, { method: "POST" });
+        const data = await res.json();
+        previewFrame.src = data.url;
+        previewFrame.style.display = "block";
+        previewOverlay.classList.add("hidden");
+        stopPreviewBtn.disabled = false;
+        refreshPreviewBtn.disabled = false;
+        toast("Preview started", "success");
+    } catch (err) {
+        toast("Preview failed", "error");
+        launchPreviewBtn.disabled = false;
+    }
+}
+
+async function stopPreview() {
+    if (!sessionId) return;
+    try { await fetch(`/preview/${sessionId}/stop`, { method: "POST" }); } catch {}
+    previewFrame.src = "about:blank";
+    previewFrame.style.display = "none";
+    previewOverlay.classList.remove("hidden");
+    launchPreviewBtn.disabled = false;
+    stopPreviewBtn.disabled = true;
+    refreshPreviewBtn.disabled = true;
+}
+
+// ── Download ──
+async function handleDownload() {
+    if (!sessionId) return;
+    try {
+        const res = await fetch(`/files/${sessionId}`);
+        const data = await res.json();
+        const files = data.files || {};
+        if (Object.keys(files).length === 0) { toast("No files to download", "error"); return; }
+
+        // Load JSZip dynamically
+        if (!window.JSZip) {
+            const script = document.createElement("script");
+            script.src = "https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js";
+            document.head.appendChild(script);
+            await new Promise((resolve) => { script.onload = resolve; });
+        }
+        const zip = new JSZip();
+        Object.entries(files).forEach(([name, content]) => zip.file(name, content));
+        const blob = await zip.generateAsync({ type: "blob" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `project-${sessionId.slice(0, 8)}.zip`;
+        a.click();
+        URL.revokeObjectURL(url);
+    } catch {
+        toast("Download failed", "error");
+    }
+}
+
+// ── Client ID ──
+function getClientId() {
+    let id = localStorage.getItem("devagent_client_id");
+    if (!id) {
+        id = genId();
+        localStorage.setItem("devagent_client_id", id);
+    }
+    return id;
+}
+
+// ── Event Listeners ──
+generateBtn.onclick = handleGenerate;
+ideaInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) handleGenerate();
+});
+
+iterSlider.oninput = () => { iterValue.textContent = iterSlider.value; };
+
+iterateBtn.onclick = () => {
+    iteratePanel.style.display = iteratePanel.style.display === "none" ? "flex" : "none";
+};
+iterateSubmitBtn.onclick = handleIterate;
+
+$$(".template-chip").forEach((chip) => {
+    chip.onclick = () => { ideaInput.value = chip.dataset.idea; };
+});
+
+manageKeysBtn.onclick = openKeysModal;
+$("#keysModalClose").onclick = () => keysModal.close();
+sidebarToggle.onclick = () => appShell.classList.toggle("sidebar-collapsed");
+newSessionBtn.onclick = () => { setPhase("ideation"); sessionId = null; };
+
+launchPreviewBtn.onclick = startPreview;
+stopPreviewBtn.onclick = stopPreview;
+refreshPreviewBtn.onclick = () => { if (previewFrame.src) previewFrame.src = previewFrame.src; };
+
+downloadBtn.onclick = handleDownload;
+
+providerSelect.onchange = async () => {
+    try {
+        const res = await fetch("/config");
+        const cfg = await res.json();
+        updateModels(cfg);
+    } catch {}
+};
+
+// ── Init ──
+loadConfig();
+setPhase("ideation");
+
 })();

@@ -8,8 +8,9 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from shared.providers import get_llm
+from src.dev_agent.agents.prompts import REVIEWER_PROMPT
 from src.dev_agent.agents.retry import REVIEWER_TASKS, emit_task_done, emit_tasks, retry_llm_call
+from src.dev_agent.llm import get_llm_for_role
 from src.dev_agent.pipeline.state import DevPipelineState
 
 logger = logging.getLogger(__name__)
@@ -18,27 +19,6 @@ logger = logging.getLogger(__name__)
 class _ReviewOutput(BaseModel):
     improved_files: dict[str, str]
     review_notes: list[str]
-
-
-_REVIEWER_PROMPT = """\
-You are a senior software reviewer. Review the following generated code and make improvements.
-
-App: {app_name}
-Runtime: {runtime}
-Test Results: {test_summary}
-
-Files to review:
-{files_summary}
-
-Your job:
-1. Fix any remaining minor issues (formatting, naming, edge cases)
-2. Add helpful comments where code is complex
-3. Ensure the code follows best practices for the runtime
-4. Return ONLY the files you modified in improved_files — do NOT include unchanged files
-5. Provide review_notes: a list of 3-5 observations about the code quality
-
-Do NOT make breaking changes. Keep the same functionality.
-"""
 
 
 async def reviewer_node(state: DevPipelineState) -> dict[str, Any]:
@@ -65,14 +45,14 @@ async def reviewer_node(state: DevPipelineState) -> dict[str, Any]:
     if tr is not None:
         test_summary = f"passed={tr.passed_count}, failed={tr.failed_count}, critical_bugs={tr.has_critical_bugs}"
 
-    prompt = _REVIEWER_PROMPT.format(
+    prompt = REVIEWER_PROMPT.format(
         app_name=plan.app_name,
         runtime=state["runtime"],
         test_summary=test_summary,
         files_summary=files_summary[:30000],
     )
 
-    llm = get_llm(temperature=0.3)
+    llm = get_llm_for_role("reviewer", state.get("llm_context"))
     structured_llm = llm.with_structured_output(_ReviewOutput)
     result: _ReviewOutput = await retry_llm_call(
         structured_llm.ainvoke,

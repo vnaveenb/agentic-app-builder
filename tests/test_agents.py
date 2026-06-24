@@ -56,7 +56,7 @@ async def test_planner_returns_plan() -> None:
     mock_structured.ainvoke = AsyncMock(return_value=plan)
     mock_llm.with_structured_output.return_value = mock_structured
 
-    with patch("src.dev_agent.agents.planner.get_llm", return_value=mock_llm):
+    with patch("src.dev_agent.agents.planner.get_llm_for_role", return_value=mock_llm):
         from src.dev_agent.agents.planner import planner_node
 
         state = _make_state()
@@ -92,7 +92,7 @@ async def test_developer_increments_iteration() -> None:
     mock_structured.ainvoke = AsyncMock(return_value=fake_result)
     mock_llm.with_structured_output.return_value = mock_structured
 
-    with patch("src.dev_agent.agents.developer.get_llm", return_value=mock_llm):
+    with patch("src.dev_agent.agents.developer.get_llm_for_role", return_value=mock_llm):
         from src.dev_agent.agents.developer import developer_node
 
         state = _make_state(plan=_make_plan(), iteration=0)
@@ -138,7 +138,7 @@ async def test_tester_merges_reports() -> None:
 
     with (
         patch("src.dev_agent.agents.tester.run_tests_in_sandbox", new_callable=AsyncMock, return_value=sandbox_report),
-        patch("src.dev_agent.agents.tester.get_llm", return_value=mock_llm),
+        patch("src.dev_agent.agents.tester.get_llm_for_role", return_value=mock_llm),
     ):
         from src.dev_agent.agents.tester import tester_node
 
@@ -170,7 +170,7 @@ async def test_reviewer_sets_status_done() -> None:
     mock_structured.ainvoke = AsyncMock(return_value=fake_result)
     mock_llm.with_structured_output.return_value = mock_structured
 
-    with patch("src.dev_agent.agents.reviewer.get_llm", return_value=mock_llm):
+    with patch("src.dev_agent.agents.reviewer.get_llm_for_role", return_value=mock_llm):
         from src.dev_agent.agents.reviewer import reviewer_node
 
         state = _make_state(

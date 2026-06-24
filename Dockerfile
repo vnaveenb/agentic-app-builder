@@ -18,8 +18,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY --from=builder /install /usr/local
 COPY src/ ./src/
 COPY shared/ ./shared/
+COPY config/ ./config/
 
-RUN useradd -m -u 1001 appuser && chown -R appuser:appuser /app
+RUN useradd -m -u 1001 appuser \
+    && mkdir -p /app/data \
+    && chown -R appuser:appuser /app
 USER appuser
 
 ENV PYTHONUNBUFFERED=1 \

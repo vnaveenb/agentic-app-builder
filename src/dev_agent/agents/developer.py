@@ -10,8 +10,14 @@ from typing import Any
 
 from pydantic import BaseModel, ValidationError
 
-from shared.providers import get_llm
+from src.dev_agent.agents.prompts import (
+    DEVELOPER_PROMPT,
+    FEEDBACK_TEMPLATE,
+    RUNTIME_INSTRUCTIONS,
+    USER_FEEDBACK_TEMPLATE,
+)
 from src.dev_agent.agents.retry import DEVELOPER_TASKS, emit_task_done, emit_tasks, retry_llm_call
+from src.dev_agent.llm import get_llm_for_role
 from src.dev_agent.pipeline.state import DevPipelineState
 
 logger = logging.getLogger(__name__)
@@ -25,85 +31,6 @@ class _FileEntry(BaseModel):
 class _DeveloperOutput(BaseModel):
     files: list[_FileEntry]
     implementation_notes: str
-
-
-_DEVELOPER_PROMPT = """\
-You are an expert software developer. Generate complete, working code files based on the plan below.
-
-PROJECT PLAN:
-- App: {app_name}
-- Runtime: {runtime}
-- Tech Stack: {tech_stack}
-- Architecture: {architecture_notes}
-- Tasks: {tasks}
-- Expected files: {estimated_files}
-- Entry point: {entry_point}
-
-RUNTIME-SPECIFIC RULES:
-{runtime_instructions}
-
-REQUIREMENTS:
-1. Generate ALL files listed in the plan
-2. Code must be complete and runnable — no placeholders or TODOs
-3. Include a test file if runtime supports it
-4. Entry point must work as specified
-
-{feedback_section}
-
-Generate the complete file set now.
-"""
-
-_RUNTIME_INSTRUCTIONS = {
-    "python": """- Include requirements.txt with all dependencies
-- Entry point must bind to PORT environment variable (default 8000)
-- Use: app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8000)))
-- Flask apps MUST have a @app.route('/') that serves the main HTML page
-- Use render_template_string or inline HTML for the root route — do NOT rely on templates/ folder
-- Include test_*.py file with pytest-compatible tests""",
-    "node": """- Include package.json with dependencies and start script
-- Entry point must listen on process.env.PORT (default 3000)
-- Include test.js using Node 20 built-in test runner (node:test)
-- Use: const port = process.env.PORT || 3000; server.listen(port)""",
-    "react": """- Generate a REAL multi-file Vite + React project. The sandbox runs `npm install` then
-  `npm run build` and serves the built dist/. Use normal ES module import/export across files.
-- package.json with EXACT pinned versions and a build script:
-    "scripts": { "build": "vite build", "dev": "vite" }
-    "dependencies": { "react": "18.3.1", "react-dom": "18.3.1" }
-    "devDependencies": { "vite": "5.4.10", "@vitejs/plugin-react": "4.3.4" }
-- vite.config.js: import react from '@vitejs/plugin-react'; export default { base: './', plugins: [react()] }
-  (base: './' is REQUIRED so built asset URLs are relative and load under the preview path.)
-- index.html at project root with: <div id="root"></div> and
-  <script type="module" src="/src/main.jsx"></script>
-- src/main.jsx: import React, ReactDOM/client and App, then
-  ReactDOM.createRoot(document.getElementById('root')).render(<App />)
-- src/App.jsx plus additional components/CSS as needed — split logic into multiple files using
-  import/export. Use real npm packages when useful (declare them in dependencies, pinned).""",
-    "angular": """- Generate a REAL Angular CLI project. The sandbox runs `npm install` then `npm run build`
-  and serves the built dist/. Use normal TypeScript modules.
-- package.json with EXACT pinned @angular/* versions and a build script that emits a relative
-  base href, e.g. "build": "ng build --base-href ./" (relative base is REQUIRED so assets load
-  under the preview path).
-- Include angular.json, tsconfig.json, src/index.html, src/main.ts, and the app under src/app/.
-- Pin every dependency to an exact version (no ^ or ~).""",
-    "static": """- Pure HTML/CSS/JS, no frameworks
-- Entry point is index.html
-- Can use multiple .js and .css files
-- No build step required""",
-}
-
-_FEEDBACK_TEMPLATE = """
-⚠️ PREVIOUS ITERATION FAILED — FIX THESE BUGS:
-{output_summary}
-
-Regenerate the files with these specific issues fixed. Keep everything else the same.
-"""
-
-_USER_FEEDBACK_TEMPLATE = """
-⚠️ USER REQUESTED CHANGES:
-{user_feedback}
-
-Apply these changes to the existing code. Keep everything else the same unless it conflicts with the requested changes.
-"""
 
 
 def _repair_parse(raw: str) -> _DeveloperOutput | None:
@@ -155,23 +82,23 @@ async def developer_node(state: DevPipelineState) -> dict[str, Any]:
     await emit_task_done(queue, "developer", 0)  # Preparing prompt
 
     runtime = state["runtime"]
-    runtime_instructions = _RUNTIME_INSTRUCTIONS.get(runtime, _RUNTIME_INSTRUCTIONS["python"])
+    runtime_instructions = RUNTIME_INSTRUCTIONS.get(runtime, RUNTIME_INSTRUCTIONS["python"])
 
     # On loop-back: include failure feedback
     feedback_section = ""
     tr = state.get("test_report")
     if iteration > 0 and tr is not None:
-        feedback_section = _FEEDBACK_TEMPLATE.format(
+        feedback_section = FEEDBACK_TEMPLATE.format(
             output_summary=tr.output_summary[:2000]
         )
 
     # User iteration feedback (from /iterate endpoint)
     if state.get("user_feedback"):
-        feedback_section += _USER_FEEDBACK_TEMPLATE.format(
+        feedback_section += USER_FEEDBACK_TEMPLATE.format(
             user_feedback=state["user_feedback"]
         )
 
-    prompt = _DEVELOPER_PROMPT.format(
+    prompt = DEVELOPER_PROMPT.format(
         app_name=plan.app_name,
         runtime=runtime,
         tech_stack=", ".join(plan.tech_stack),
@@ -183,7 +110,7 @@ async def developer_node(state: DevPipelineState) -> dict[str, Any]:
         feedback_section=feedback_section,
     )
 
-    llm = get_llm(temperature=0.1, max_tokens=32768)
+    llm = get_llm_for_role("developer", state.get("llm_context"))
     structured_llm = llm.with_structured_output(_DeveloperOutput, include_raw=True)
 
     result: _DeveloperOutput | None = None
@@ -230,6 +157,11 @@ async def developer_node(state: DevPipelineState) -> dict[str, Any]:
     logger.info("Developer generated %d files (iteration %d)", len(files), iteration + 1)
 
     if queue:
+        await queue.put({
+            "event": "files_update",
+            "agent": "developer",
+            "files": files,
+        })
         await queue.put({
             "event": "agent_output",
             "agent": "developer",
