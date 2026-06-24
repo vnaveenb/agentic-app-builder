@@ -603,19 +603,21 @@ function addSessionToList(id, idea) {
 // ── Sidebar: Config ──
 async function loadConfig() {
     try {
-        const res = await fetch("/config");
+        const clientId = getClientId();
+        const res = await fetch(`/providers?client_id=${encodeURIComponent(clientId)}`);
         const cfg = await res.json();
 
         providerSelect.innerHTML = "";
         (cfg.providers || []).forEach((p) => {
             const opt = document.createElement("option");
             opt.value = p.id;
-            opt.textContent = p.name;
+            opt.textContent = p.label;
+            if (p.id === cfg.default_provider) opt.selected = true;
             providerSelect.appendChild(opt);
         });
 
         updateModels(cfg);
-        providerBadge.textContent = `${cfg.default_provider || "gemini"} / ${cfg.default_model || "flash"}`;
+        providerBadge.textContent = `${cfg.default_provider || "gemini"} / ${cfg.default_model || ""}`;
     } catch {
         providerBadge.textContent = "Config unavailable";
     }
@@ -624,14 +626,19 @@ async function loadConfig() {
 function updateModels(cfg) {
     modelSelect.innerHTML = "";
     const provider = providerSelect.value;
-    const models = (cfg.providers || []).find((p) => p.id === provider)?.models || [];
+    const prov = (cfg.providers || []).find((p) => p.id === provider);
+    const models = prov ? prov.models : [];
     models.forEach((m) => {
         const opt = document.createElement("option");
         opt.value = m.id;
-        opt.textContent = m.name;
+        opt.textContent = m.label;
+        if (m.default) opt.selected = true;
         modelSelect.appendChild(opt);
     });
 }
+
+// Store config for reuse on provider change
+let _cachedConfig = null;
 
 // ── Keys Modal ──
 function openKeysModal() {
@@ -793,9 +800,11 @@ downloadBtn.onclick = handleDownload;
 
 providerSelect.onchange = async () => {
     try {
-        const res = await fetch("/config");
+        const clientId = getClientId();
+        const res = await fetch(`/providers?client_id=${encodeURIComponent(clientId)}`);
         const cfg = await res.json();
         updateModels(cfg);
+        providerBadge.textContent = `${providerSelect.value} / ${modelSelect.value || ""}`;
     } catch {}
 };
 
