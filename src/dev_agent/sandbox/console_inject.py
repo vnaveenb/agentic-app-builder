@@ -110,7 +110,7 @@ def normalize_react_preview(content: bytes) -> bytes:
 
     stripped_any = False
 
-    def _sub(m: "re.Match[bytes]") -> bytes:
+    def _sub(m: re.Match[bytes]) -> bytes:
         nonlocal stripped_any
         open_tag, body, close_tag = m.group(1), m.group(2), m.group(3)
         new_body = _normalize_babel_block(body)

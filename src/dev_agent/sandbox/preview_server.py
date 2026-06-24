@@ -14,6 +14,7 @@ Two preview modes:
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import pathlib
@@ -26,14 +27,16 @@ import time
 import httpx
 
 from src.dev_agent.sandbox.base import SandboxRunner
+from src.dev_agent.sandbox.build_runner import build_project
 
 logger = logging.getLogger(__name__)
 
 _PORT_RANGE = range(9100, 9121)  # 20 concurrent previews max
 _allocated_ports: dict[str, int] = {}  # session_id → port (server mode only)
 _active_pids: dict[str, int] = {}  # session_id → PID (server mode only)
-_preview_dirs: dict[str, str] = {}  # session_id → tmpdir path
+_preview_dirs: dict[str, str] = {}  # session_id → serve root (dist for build mode)
 _preview_mode: dict[str, str] = {}  # session_id → "static" | "server"
+_build_roots: dict[str, str] = {}  # session_id → build tmpdir root (for cleanup)
 
 
 # ── Tiering ────────────────────────────────────────────────────────────────────
@@ -70,6 +73,40 @@ def is_static_preview(runtime: str, files: dict[str, str]) -> bool:
         return False
 
     return has_index
+
+
+def _has_server_entry(files: dict[str, str]) -> bool:
+    """True if the file set looks like a real Python/Node *server* (not a front-end build)."""
+    py_server = any(
+        f.endswith(".py")
+        and any(tok in content for tok in ("Flask", "FastAPI", "Starlette", "uvicorn"))
+        for f, content in files.items()
+    )
+    node_server = any(
+        f.endswith(".js")
+        and any(tok in content for tok in (".listen(", "createServer", "express(", "http.Server"))
+        for f, content in files.items()
+    )
+    return py_server or node_server
+
+
+def needs_build(runtime: str, files: dict[str, str]) -> bool:
+    """True if this is a front-end project that must be bundled before serving.
+
+    Any project with a ``package.json`` declaring a ``build`` script qualifies —
+    covers React (Vite) and Angular (ng) — *unless* it's actually a Node/Python
+    server (those run as a live process via the server tier).
+    """
+    pj = files.get("package.json")
+    if not pj:
+        return False
+    try:
+        scripts = json.loads(pj).get("scripts", {})
+    except (json.JSONDecodeError, AttributeError):
+        return False
+    if "build" not in scripts:
+        return False
+    return not _has_server_entry(files)
 
 
 def get_preview_mode(session_id: str) -> str | None:
@@ -152,6 +189,28 @@ def _start_static(session_id: str, files: dict[str, str]) -> dict[str, object]:
     return {"url": f"/preview/{session_id}", "status": "running", "mode": "static"}
 
 
+# ── Build mode ───────────────────────────────────────────────────────────────────
+
+async def _start_build(
+    session_id: str,
+    files: dict[str, str],
+    event_queue: asyncio.Queue | None = None,
+) -> dict[str, object]:
+    """npm install + npm run build, then serve the produced dist/ statically.
+
+    The build runs in a thread (it shells out to npm); its output dir is then
+    registered as a static preview so serving reuses the static path. Raises
+    RuntimeError (with the build log) on failure.
+    """
+    loop = asyncio.get_event_loop()
+    tmpdir, dist = await loop.run_in_executor(None, build_project, files, event_queue)
+    _build_roots[session_id] = tmpdir  # parent dir to remove on cleanup
+    _preview_dirs[session_id] = dist   # serve root = built output
+    _preview_mode[session_id] = "static"
+    logger.info("Build preview ready for session=%s (serving %s)", session_id[:12], dist)
+    return {"url": f"/preview/{session_id}", "status": "running", "mode": "build"}
+
+
 def resolve_static_file(session_id: str, path: str) -> pathlib.Path | None:
     """Resolve a request path to a file inside the session's static dir (safe-join).
 
@@ -230,8 +289,11 @@ async def start_preview(
     files: dict[str, str],
     runner: SandboxRunner,
     runtime: str = "",
+    event_queue: asyncio.Queue | None = None,
 ) -> dict[str, object]:
-    """Start a preview, choosing static-serve or a server subprocess by file set."""
+    """Start a preview, choosing build / static-serve / server subprocess by file set."""
+    if needs_build(runtime, files):
+        return await _start_build(session_id, files, event_queue)
     if is_static_preview(runtime, files):
         return _start_static(session_id, files)
     return await _start_server(session_id, files, runner)
@@ -282,7 +344,9 @@ def stop_preview(session_id: str, runner: SandboxRunner) -> None:
             logger.warning("Failed to stop preview PID %d: %s", pid, exc)
     release_port(session_id)
     _preview_mode.pop(session_id, None)
-    tmpdir = _preview_dirs.pop(session_id, None)
+    serve_dir = _preview_dirs.pop(session_id, None)
+    # For build mode the tracked root is the parent of the served dist/ dir.
+    tmpdir = _build_roots.pop(session_id, None) or serve_dir
     if tmpdir:
         shutil.rmtree(tmpdir, ignore_errors=True)
 
@@ -296,8 +360,10 @@ def cleanup_all() -> None:
             pass
     _active_pids.clear()
     _allocated_ports.clear()
-    for tmpdir in _preview_dirs.values():
+    # Remove build roots (parents of served dist dirs) and any other serve dirs.
+    for tmpdir in list(_build_roots.values()) + list(_preview_dirs.values()):
         shutil.rmtree(tmpdir, ignore_errors=True)
+    _build_roots.clear()
     _preview_dirs.clear()
     _preview_mode.clear()
     logger.info("All preview servers cleaned up")

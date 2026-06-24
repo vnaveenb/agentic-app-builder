@@ -684,7 +684,9 @@ async def preview_start(session_id: str) -> PreviewStartResponse:
         raise HTTPException(400, "Pipeline not complete — cannot start preview")
 
     try:
-        info = await gateway.preview_start(session_id, state["files"], state["runtime"])
+        info = await gateway.preview_start(
+            session_id, state["files"], state["runtime"], state.get("event_queue")
+        )
     except RuntimeError as exc:
         # Surface the real failure (captured stderr) so the UI can show it.
         raise HTTPException(503, str(exc)) from None

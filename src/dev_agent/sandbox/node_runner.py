@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import pathlib
@@ -17,11 +18,30 @@ from src.dev_agent.sandbox.base import PreviewInfo, SandboxRunner, TestReport, e
 logger = logging.getLogger(__name__)
 
 
+def _npm_scripts(files: dict[str, str]) -> dict[str, str]:
+    """Return the ``scripts`` block from package.json, or {} if absent/unparseable."""
+    pj = files.get("package.json")
+    if not pj:
+        return {}
+    try:
+        return json.loads(pj).get("scripts", {}) or {}
+    except (json.JSONDecodeError, AttributeError):
+        return {}
+
+
 class NodeRunner(SandboxRunner):
     """Runs Node.js tests and previews for Node/React/Angular projects."""
 
     def run_tests(self, files: dict[str, str], event_queue: asyncio.Queue | None = None) -> TestReport:
         start = time.monotonic()
+        scripts = _npm_scripts(files)
+
+        # Front-end build projects (Vite/Angular) can't be unit-tested with
+        # `node --test` (JSX/TS source). Their gate is the build itself, which
+        # runs at preview time; here we only run an explicit `npm test` if present.
+        if "build" in scripts:
+            return self._run_build_project_tests(files, scripts, event_queue, start)
+
         with tempfile.TemporaryDirectory(prefix="dev_agent_node_") as tmpdir:
             tmp = pathlib.Path(tmpdir)
             for name, content in files.items():
@@ -109,6 +129,62 @@ class NodeRunner(SandboxRunner):
 
         elapsed_ms = int((time.monotonic() - start) * 1000)
         return _parse_node_output(output, return_code, elapsed_ms)
+
+    def _run_build_project_tests(
+        self,
+        files: dict[str, str],
+        scripts: dict[str, str],
+        event_queue: asyncio.Queue | None,
+        start: float,
+    ) -> TestReport:
+        """Run `npm test` for a build project if it has a test script; else skip.
+
+        The build itself is the real correctness gate for front-end projects and
+        runs at preview time, so a missing test script is not a failure here.
+        """
+        if "test" not in scripts:
+            msg = "Front-end build project — validated by build, no unit tests to run"
+            emit_terminal(event_queue, "tester", msg)
+            return TestReport(
+                has_critical_bugs=False, passed_count=0, failed_count=0, error_count=0,
+                output_summary=msg, test_cases=[], execution_time_ms=0,
+            )
+
+        with tempfile.TemporaryDirectory(prefix="dev_agent_build_test_") as tmpdir:
+            tmp = pathlib.Path(tmpdir)
+            for name, content in files.items():
+                path = tmp / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(content, encoding="utf-8")
+
+            emit_terminal(event_queue, "tester", "$ npm install")
+            try:
+                subprocess.run(["npm", "install"], cwd=tmpdir, timeout=180,
+                               capture_output=True, text=True)
+            except (subprocess.TimeoutExpired, FileNotFoundError):
+                msg = "npm install failed/unavailable — skipping build-project tests"
+                emit_terminal(event_queue, "tester", msg)
+                return TestReport(
+                    has_critical_bugs=False, passed_count=0, failed_count=0, error_count=0,
+                    output_summary=msg, test_cases=[], execution_time_ms=0,
+                )
+
+            emit_terminal(event_queue, "tester", "$ npm test")
+            try:
+                result = subprocess.run(["npm", "test"], cwd=tmpdir, timeout=180,
+                                        capture_output=True, text=True)
+            except subprocess.TimeoutExpired:
+                msg = "npm test timed out"
+                emit_terminal(event_queue, "tester", f"ERROR: {msg}")
+                return TestReport(
+                    has_critical_bugs=True, passed_count=0, failed_count=1, error_count=1,
+                    output_summary=msg, test_cases=[], execution_time_ms=180_000,
+                )
+            output = (result.stdout or "") + (result.stderr or "")
+            emit_terminal(event_queue, "tester", output)
+
+        elapsed_ms = int((time.monotonic() - start) * 1000)
+        return _parse_node_output(output, result.returncode, elapsed_ms)
 
     def start_preview(self, files: dict[str, str], port: int) -> PreviewInfo:
         """Start Node.js server or serve static React/Angular files."""

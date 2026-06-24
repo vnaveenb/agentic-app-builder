@@ -79,13 +79,21 @@ async def run_tests(
 
 # ── Preview ─────────────────────────────────────────────────────────────────────
 
-async def preview_start(session_id: str, files: dict[str, str], runtime: str) -> dict[str, Any]:
+async def preview_start(
+    session_id: str,
+    files: dict[str, str],
+    runtime: str,
+    event_queue: asyncio.Queue[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     """Start a preview. Raises RuntimeError(detail) on failure."""
     if not is_remote():
         runner = get_runner_for_files(runtime, files)
-        return await preview_server.start_preview(session_id, files, runner, runtime)  # type: ignore[return-value]
+        return await preview_server.start_preview(
+            session_id, files, runner, runtime, event_queue
+        )
 
-    async with httpx.AsyncClient(timeout=60.0) as client:
+    # Build previews can take minutes (npm install + bundler); allow ample time.
+    async with httpx.AsyncClient(timeout=300.0) as client:
         resp = await client.post(
             f"{_SANDBOX_URL}/preview/start",
             json={"session_id": session_id, "files": files, "runtime": runtime},
@@ -94,7 +102,8 @@ async def preview_start(session_id: str, files: dict[str, str], runtime: str) ->
         raise RuntimeError(_detail(resp))
     resp.raise_for_status()
     _remote_active.add(session_id)
-    return resp.json()
+    data: dict[str, Any] = resp.json()
+    return data
 
 
 async def preview_stop(session_id: str, files: dict[str, str], runtime: str) -> None:

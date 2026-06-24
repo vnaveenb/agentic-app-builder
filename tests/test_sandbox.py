@@ -1,15 +1,19 @@
 """Sandbox runner unit tests — no LLM, no API keys needed."""
 
 import asyncio
+import json as _json
+import pathlib as _pathlib
 
 import pytest
 
 from src.dev_agent.sandbox import preview_server
+from src.dev_agent.sandbox.build_runner import _ABS_ASSET_RE, _find_build_output
 from src.dev_agent.sandbox.preview_server import (
     _allocated_ports,
     allocate_port,
     get_preview_mode,
     is_static_preview,
+    needs_build,
     release_port,
     resolve_static_file,
 )
@@ -295,3 +299,75 @@ def test_prepare_preview_html_combines_normalize_and_console_capture() -> None:
     out = prepare_preview_html(_REACT_IMPORT_HTML)
     assert b"import React" not in out  # normalized
     assert b"window.parent.postMessage" in out  # console capture injected
+
+
+# ── Build tier: needs_build / _find_build_output / asset rewrite ───────────────
+
+
+def _pkg(scripts: dict) -> str:
+    return _json.dumps({"name": "x", "version": "1.0.0", "scripts": scripts})
+
+
+@pytest.mark.unit
+def test_needs_build_true_for_vite_react_project() -> None:
+    files = {
+        "package.json": _pkg({"build": "vite build"}),
+        "index.html": "<div id=root></div>",
+        "src/App.jsx": "export default function App(){return null}",
+    }
+    assert needs_build("react", files) is True
+
+
+@pytest.mark.unit
+def test_needs_build_false_without_build_script() -> None:
+    files = {"package.json": _pkg({"start": "node server.js"}), "index.html": "x"}
+    assert needs_build("react", files) is False
+
+
+@pytest.mark.unit
+def test_needs_build_false_without_package_json() -> None:
+    files = {"index.html": "<script type='text/babel'>const x=1</script>"}
+    assert needs_build("react", files) is False
+
+
+@pytest.mark.unit
+def test_needs_build_false_for_node_server_with_build_script() -> None:
+    # A real server must run as a process, even if it declares a build script.
+    files = {
+        "package.json": _pkg({"build": "tsc", "start": "node server.js"}),
+        "server.js": "require('http').createServer().listen(3000)",
+    }
+    assert needs_build("node", files) is False
+
+
+@pytest.mark.unit
+def test_find_build_output_dist(tmp_path: _pathlib.Path) -> None:
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "index.html").write_text("<html></html>")
+    assert _find_build_output(tmp_path) == dist
+
+
+@pytest.mark.unit
+def test_find_build_output_angular_nested(tmp_path: _pathlib.Path) -> None:
+    nested = tmp_path / "dist" / "my-app"
+    nested.mkdir(parents=True)
+    (nested / "index.html").write_text("<html></html>")
+    assert _find_build_output(tmp_path) == nested
+
+
+@pytest.mark.unit
+def test_find_build_output_none(tmp_path: _pathlib.Path) -> None:
+    (tmp_path / "src").mkdir()
+    assert _find_build_output(tmp_path) is None
+
+
+@pytest.mark.unit
+def test_abs_asset_rewrite_makes_paths_relative() -> None:
+    html = b'<script src="/assets/index-abc.js"></script><link href="/assets/x.css">'
+    fixed = _ABS_ASSET_RE.sub(rb"\1\2./", html)
+    assert b'src="./assets/index-abc.js"' in fixed
+    assert b'href="./assets/x.css"' in fixed
+    # Protocol-relative / absolute URLs must be left alone.
+    keep = b'<script src="https://cdn/x.js"></script><img src="//cdn/y.png">'
+    assert _ABS_ASSET_RE.sub(rb"\1\2./", keep) == keep

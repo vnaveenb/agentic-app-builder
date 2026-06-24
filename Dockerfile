@@ -26,6 +26,14 @@ ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONPATH=/app
 
+# Pre-warm the npm cache with the pinned front-end build toolchain so generated
+# React/Vite previews install fast (and resiliently) at runtime. Runs as appuser
+# so the cache lands in /home/appuser/.npm; node_modules is discarded.
+RUN mkdir -p /tmp/warm && cd /tmp/warm && \
+    printf '%s' '{"name":"warm","version":"1.0.0","dependencies":{"react":"18.3.1","react-dom":"18.3.1"},"devDependencies":{"vite":"5.4.10","@vitejs/plugin-react":"4.3.4"}}' > package.json && \
+    npm install --no-audit --no-fund && \
+    rm -rf /tmp/warm
+
 EXPOSE 8007
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \

@@ -64,18 +64,27 @@ _RUNTIME_INSTRUCTIONS = {
 - Entry point must listen on process.env.PORT (default 3000)
 - Include test.js using Node 20 built-in test runner (node:test)
 - Use: const port = process.env.PORT || 3000; server.listen(port)""",
-    "react": """- Single self-contained index.html. Do NOT use npm, webpack, vite, or any build tools, and do NOT generate package.json.
-- Load React/ReactDOM/Babel from CDN with these EXACT pinned UMD tags:
-  <script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js"></script>
-  <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
-  <script src="https://unpkg.com/@babel/standalone@7.26.4/babel.min.js"></script>
-- Put ALL JSX inside a single <script type="text/babel"> ... </script> block.
-- CRITICAL: Do NOT use ES module `import` or `export` statements anywhere. There is no bundler.
-  Access React's API from the global React object instead, e.g. `const { useState, useEffect } = React;`.
-- Mount with: ReactDOM.createRoot(document.getElementById('root')).render(<App />);""",
-    "angular": """- Single self-contained index.html with embedded scripts. Do NOT use npm, ng CLI, or any build tools, and do NOT generate package.json.
-- Load Angular from CDN with EXACT pinned <script src=...> tags from cdnjs.cloudflare.com.
-- Do NOT use ES module `import` or `export` statements anywhere — there is no bundler.""",
+    "react": """- Generate a REAL multi-file Vite + React project. The sandbox runs `npm install` then
+  `npm run build` and serves the built dist/. Use normal ES module import/export across files.
+- package.json with EXACT pinned versions and a build script:
+    "scripts": { "build": "vite build", "dev": "vite" }
+    "dependencies": { "react": "18.3.1", "react-dom": "18.3.1" }
+    "devDependencies": { "vite": "5.4.10", "@vitejs/plugin-react": "4.3.4" }
+- vite.config.js: import react from '@vitejs/plugin-react'; export default { base: './', plugins: [react()] }
+  (base: './' is REQUIRED so built asset URLs are relative and load under the preview path.)
+- index.html at project root with: <div id="root"></div> and
+  <script type="module" src="/src/main.jsx"></script>
+- src/main.jsx: import React, ReactDOM/client and App, then
+  ReactDOM.createRoot(document.getElementById('root')).render(<App />)
+- src/App.jsx plus additional components/CSS as needed — split logic into multiple files using
+  import/export. Use real npm packages when useful (declare them in dependencies, pinned).""",
+    "angular": """- Generate a REAL Angular CLI project. The sandbox runs `npm install` then `npm run build`
+  and serves the built dist/. Use normal TypeScript modules.
+- package.json with EXACT pinned @angular/* versions and a build script that emits a relative
+  base href, e.g. "build": "ng build --base-href ./" (relative base is REQUIRED so assets load
+  under the preview path).
+- Include angular.json, tsconfig.json, src/index.html, src/main.ts, and the app under src/app/.
+- Pin every dependency to an exact version (no ^ or ~).""",
     "static": """- Pure HTML/CSS/JS, no frameworks
 - Entry point is index.html
 - Can use multiple .js and .css files

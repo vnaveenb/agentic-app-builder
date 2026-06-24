@@ -18,12 +18,18 @@ You are a software architect. Given a user's app idea, produce a detailed projec
 IMPORTANT — Runtime detection rules:
 - "python" → for Flask, FastAPI, Django, scripts, CLI tools, data apps
 - "node" → for Express, Koa, Hapi, backend JavaScript/TypeScript servers
-- "react" → for React UI apps (use CDN imports from unpkg.com/react — do NOT use npm/webpack/vite)
-- "angular" → for Angular UI apps (use CDN imports from cdnjs.cloudflare.com — do NOT use npm/ng CLI)
+- "react" → for React UI apps
+- "angular" → for Angular UI apps
 - "static" → for plain HTML/CSS/JS pages, landing pages, portfolios
 
-For React and Angular: generate a single index.html that loads the framework from CDN.
-Do NOT generate package.json or require any build step for React/Angular projects.
+For React: plan a real multi-file Vite project — a package.json (with a "build" script),
+vite.config.js, index.html, and multiple files under src/ using ES module import/export.
+The sandbox runs `npm install` + `npm run build` and serves the built dist/. entry_point: index.html.
+
+For Angular: plan a real Angular CLI project — package.json (with a "build" script), angular.json,
+and files under src/. The sandbox runs `npm install` + `npm run build`. entry_point: index.html.
+
+Only use "static" for genuinely dependency-free pages.
 
 The user's idea: {idea}
 
@@ -55,7 +61,10 @@ async def planner_node(state: DevPipelineState) -> dict[str, Any]:
     memory_context = ""
     try:
         from src.dev_agent.db.database import async_session_factory
-        from src.dev_agent.memory.memory_store import format_memories_for_prompt, get_relevant_memories
+        from src.dev_agent.memory.memory_store import (
+            format_memories_for_prompt,
+            get_relevant_memories,
+        )
 
         async with async_session_factory() as db:
             memories = await get_relevant_memories(db, limit=5)
