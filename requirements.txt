@@ -34,6 +34,9 @@ aiofiles==24.1.0
 pyyaml==6.0.2          # config/models.yaml loader (single source of truth)
 cryptography==44.0.1   # Fernet encryption for user-supplied (BYOK) API keys
 
+# ── Auth (Firebase) ──────────────────────────────────────────────────────────
+firebase-admin==6.6.0
+
 # ── Observability ─────────────────────────────────────────────────────────────
 langsmith==0.8.8
 python-dotenv==1.2.2

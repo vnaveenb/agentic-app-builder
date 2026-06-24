@@ -79,6 +79,24 @@ const keysModal = $("#keysModal");
 const keysList = $("#keysList");
 
 // ── Utilities ──
+function getAuthToken() {
+    return localStorage.getItem("devagent_token");
+}
+
+function authFetch(url, options = {}) {
+    const token = getAuthToken();
+    if (!token) { window.location.href = "/login"; return Promise.reject(new Error("Not authenticated")); }
+    options.headers = { ...(options.headers || {}), "Authorization": `Bearer ${token}` };
+    return fetch(url, options).then((r) => {
+        if (r.status === 401) {
+            localStorage.removeItem("devagent_token");
+            localStorage.removeItem("devagent_user");
+            window.location.href = "/login";
+        }
+        return r;
+    });
+}
+
 function escape(s) {
     if (!s) return "";
     const d = document.createElement("div");
@@ -108,6 +126,41 @@ function toast(msg, type = "info") {
 
 function genId() {
     return crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2);
+}
+
+function relativeTime(isoString) {
+    if (!isoString) return "";
+    const diff = Date.now() - new Date(isoString).getTime();
+    const mins = Math.floor(diff / 60000);
+    if (mins < 1) return "just now";
+    if (mins < 60) return `${mins}m ago`;
+    const hrs = Math.floor(mins / 60);
+    if (hrs < 24) return `${hrs}h ago`;
+    const days = Math.floor(hrs / 24);
+    if (days === 1) return "yesterday";
+    if (days < 7) return `${days}d ago`;
+    return new Date(isoString).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+function dateGroup(isoString) {
+    if (!isoString) return "Recent";
+    const d = new Date(isoString);
+    const now = new Date();
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const yesterday = new Date(today); yesterday.setDate(today.getDate() - 1);
+    const weekAgo = new Date(today); weekAgo.setDate(today.getDate() - 7);
+    if (d >= today) return "Today";
+    if (d >= yesterday) return "Yesterday";
+    if (d >= weekAgo) return "This Week";
+    return "Older";
+}
+
+function smartTruncate(text, max = 30) {
+    if (!text) return "Untitled";
+    let t = text.replace(/^(a |an |the )/i, "").trim();
+    if (t.length <= max) return t;
+    const cut = t.lastIndexOf(" ", max);
+    return (cut > 10 ? t.slice(0, cut) : t.slice(0, max)) + "...";
 }
 
 // ── Phase Management ──
@@ -191,6 +244,7 @@ function createAgentBlock(agent, status = "running") {
             <span class="agent-dot"></span>
             <span class="agent-name">${escape(agent)}</span>
             <span class="agent-status">${status === "running" ? "thinking..." : ""}</span>
+            <span class="agent-char-count"></span>
             <span class="agent-timer-text"></span>
             <span class="agent-toggle">&#9662;</span>
         </div>
@@ -198,6 +252,7 @@ function createAgentBlock(agent, status = "running") {
             <pre class="agent-stream"></pre>
         </div>
     `;
+    block._charCount = 0;
     block.querySelector(".agent-block-header").onclick = () => {
         block.classList.toggle("expanded");
     };
@@ -250,7 +305,7 @@ function renderPlanCard(plan, targetEl) {
 async function approvePlan(card) {
     card.querySelector(".plan-actions").innerHTML = `<span style="color:var(--accent-emerald);font-weight:600;">Approved — building...</span>`;
     try {
-        await fetch(`/approve-plan/${sessionId}`, { method: "POST" });
+        await authFetch(`/approve-plan/${sessionId}`, { method: "POST" });
         setPhase("building");
     } catch (err) {
         toast("Failed to approve plan", "error");
@@ -336,7 +391,9 @@ function switchFileInEditor(fname, tabsContainer, ed, models) {
 // ── SSE Connection ──
 function connectSSE() {
     if (eventSource) eventSource.close();
-    eventSource = new EventSource(`/stream/${sessionId}`);
+    const token = getAuthToken();
+    const url = `/stream/${sessionId}` + (token ? `?token=${encodeURIComponent(token)}` : "");
+    eventSource = new EventSource(url);
     let currentBlock = null;
     let currentAgent = "";
 
@@ -360,6 +417,9 @@ function connectSSE() {
                         stream.textContent += ev.chunk;
                         stream.scrollTop = stream.scrollHeight;
                     }
+                    currentBlock._charCount = (currentBlock._charCount || 0) + (ev.chunk || "").length;
+                    const ccEl = currentBlock.querySelector(".agent-char-count");
+                    if (ccEl) ccEl.textContent = `${currentBlock._charCount} chars`;
                 }
                 break;
 
@@ -416,6 +476,20 @@ function handleAgentComplete(ev, block) {
         if (statusEl) statusEl.textContent = rec ? fmtMs(rec.elapsed) : "done";
         const timerEl = block.querySelector(".agent-timer-text");
         if (timerEl) timerEl.textContent = "";
+        const ccEl = block.querySelector(".agent-char-count");
+        if (ccEl) ccEl.textContent = "";
+
+        if (ev.data && ev.data.files_generated) {
+            const fileArr = Array.isArray(ev.data.files_generated) ? ev.data.files_generated : Object.keys(ev.data.files_generated);
+            const fileCount = fileArr.length;
+            const lineCount = Array.isArray(ev.data.files_generated) ? 0 :
+                Object.values(ev.data.files_generated).reduce((sum, c) => sum + (c || "").split("\n").length, 0);
+            const summary = document.createElement("div");
+            summary.className = "agent-block-summary";
+            summary.innerHTML = `<span class="file-count">${fileCount} file${fileCount !== 1 ? "s" : ""}</span>` +
+                (lineCount ? `<span class="line-count">${lineCount} lines</span>` : "");
+            block.appendChild(summary);
+        }
     }
 }
 
@@ -445,7 +519,8 @@ function handleFilesUpdate(ev) {
     if (!ev.files || Object.keys(ev.files).length === 0) return;
 
     if (currentPhase === "building") {
-        inlineEditorArea.style.display = "flex";
+        const skeleton = document.getElementById("inlineEditorSkeleton");
+        if (skeleton) skeleton.classList.add("hidden");
         const count = Object.keys(ev.files).length;
         $("#inlineFileCount").textContent = `${count} file${count > 1 ? "s" : ""}`;
         loadFilesIntoEditor(ev.files, inlineMonaco, inlineFileTabs, true);
@@ -459,7 +534,7 @@ function handlePipelineDone(ev) {
     if (files && Object.keys(files).length > 0) {
         transitionToComplete(files, ev);
     } else {
-        fetch(`/files/${sessionId}`)
+        authFetch(`/files/${sessionId}`)
             .then((r) => r.json())
             .then((data) => {
                 if (data.files && Object.keys(data.files).length > 0) {
@@ -482,14 +557,23 @@ function transitionToComplete(files, ev) {
     setPhase("complete");
 
     const totalTime = buildStartTime ? fmtMs(performance.now() - buildStartTime) : "";
+    const fileCount = files ? Object.keys(files).length : 0;
+    const lineCount = files ? Object.values(files).reduce((sum, c) => sum + (c || "").split("\n").length, 0) : 0;
     completeSummary.innerHTML = `
-        <span class="summary-status">Build complete ${totalTime ? `(${totalTime})` : ""}</span>
-        <span class="summary-agents">${AGENTS_ORDER.map((a) => `<span style="color:var(--agent-${a})">&#10003; ${a}</span>`).join(" ")}</span>
+        <div class="summary-status">
+            <span class="summary-icon">&#10003;</span>
+            Build Complete
+        </div>
+        ${totalTime ? `<span class="summary-time">${totalTime}</span>` : ""}
+        <span style="font-size:var(--text-xs);color:var(--text-muted);">${fileCount} files &middot; ${lineCount} lines</span>
+        <div class="summary-agents">${AGENTS_ORDER.map((a) => `<span style="color:var(--agent-${a})">&#10003; ${a}</span>`).join(" ")}</div>
     `;
 
     loadFilesIntoEditor(files, monacoContainer, fileTabs, false);
     launchPreviewBtn.disabled = false;
     downloadBtn.disabled = false;
+
+    setTimeout(() => startPreview(), 500);
 }
 
 function handleError(ev) {
@@ -523,7 +607,7 @@ async function handleGenerate() {
     resetStepper();
     planningStream.innerHTML = "";
     buildStream.innerHTML = "";
-    inlineEditorArea.style.display = "none";
+    resetInlineEditor();
 
     const provider = providerSelect.value;
     const model = modelSelect.value;
@@ -539,7 +623,7 @@ async function handleGenerate() {
     };
 
     try {
-        const res = await fetch("/generate", {
+        const res = await authFetch("/generate", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(body),
@@ -568,12 +652,12 @@ async function handleIterate() {
     iterateSubmitBtn.disabled = true;
     setPhase("building");
     buildStream.innerHTML = "";
-    inlineEditorArea.style.display = "none";
+    resetInlineEditor();
     resetStepper();
     startBuildTimer();
 
     try {
-        await fetch(`/iterate/${sessionId}`, {
+        await authFetch(`/iterate/${sessionId}`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ feedback, client_id: getClientId() }),
@@ -588,23 +672,122 @@ async function handleIterate() {
 }
 
 // ── Sidebar: Sessions ──
+function buildSessionItem(id, idea, status, runtime, createdAt) {
+    const item = document.createElement("div");
+    item.className = "session-item";
+    item.dataset.sessionId = id;
+    const dotClass = status === "done" ? "done" : status === "running" ? "running" : status === "error" ? "error" : "";
+    item.innerHTML = `
+        <div class="session-header">
+            <span class="session-status-dot ${dotClass}"></span>
+            <span class="session-title">${escape(smartTruncate(idea))}</span>
+        </div>
+        <div class="session-meta">
+            ${runtime ? `<span class="session-runtime">${escape(runtime)}</span>` : ""}
+            ${createdAt ? `<span class="session-time">${relativeTime(createdAt)}</span>` : ""}
+        </div>
+        <span class="session-delete" title="Delete session">&times;</span>
+    `;
+    item.querySelector(".session-delete").onclick = (e) => { e.stopPropagation(); deleteSession(id, item); };
+    item.onclick = () => restoreSession(id);
+    return item;
+}
+
 function addSessionToList(id, idea) {
     const empty = sessionList.querySelector(".session-empty");
     if (empty) empty.remove();
 
-    const item = document.createElement("div");
-    item.className = "session-item active";
-    item.innerHTML = `<span class="session-dot"></span><span>${escape(idea.substring(0, 30))}${idea.length > 30 ? "..." : ""}</span>`;
-
+    const item = buildSessionItem(id, idea, "running", runtimeSelect.value, new Date().toISOString());
+    item.classList.add("active");
     sessionList.querySelectorAll(".session-item").forEach((i) => i.classList.remove("active"));
-    sessionList.prepend(item);
+
+    const firstGroup = sessionList.querySelector(".session-group-header");
+    if (firstGroup) firstGroup.after(item);
+    else sessionList.prepend(item);
+}
+
+async function loadSessions() {
+    sessionList.innerHTML = `
+        <div class="skeleton-session"><div class="skeleton skeleton-line"></div><div class="skeleton skeleton-line short"></div></div>
+        <div class="skeleton-session"><div class="skeleton skeleton-line"></div><div class="skeleton skeleton-line short"></div></div>
+        <div class="skeleton-session"><div class="skeleton skeleton-line"></div><div class="skeleton skeleton-line short"></div></div>
+    `;
+    try {
+        const res = await authFetch("/sessions");
+        if (!res || !res.ok) return;
+        const data = await res.json();
+        sessionList.innerHTML = "";
+        const sessions = data.sessions || [];
+        if (sessions.length === 0) {
+            sessionList.innerHTML = '<div class="session-empty">No sessions yet &mdash; describe your idea above to get started</div>';
+            return;
+        }
+        let lastGroup = "";
+        sessions.forEach((s) => {
+            const group = dateGroup(s.created_at);
+            if (group !== lastGroup) {
+                const header = document.createElement("div");
+                header.className = "session-group-header";
+                header.textContent = group;
+                sessionList.appendChild(header);
+                lastGroup = group;
+            }
+            const item = buildSessionItem(s.session_id, s.idea, s.status, s.runtime, s.created_at);
+            sessionList.appendChild(item);
+        });
+    } catch {}
+}
+
+async function restoreSession(id) {
+    try {
+        const res = await authFetch(`/sessions/${id}/restore`);
+        if (!res || !res.ok) { toast("Failed to restore session", "error"); return; }
+        const data = await res.json();
+        sessionId = data.session_id;
+
+        // Highlight in sidebar
+        sessionList.querySelectorAll(".session-item").forEach((el) => {
+            el.classList.toggle("active", el.dataset.sessionId === id);
+        });
+
+        // Set phase based on status
+        if (data.status === "done" && data.files && Object.keys(data.files).length > 0) {
+            setPhase("complete");
+            loadFilesIntoEditor(data.files, monacoContainer, fileTabs, false);
+            launchPreviewBtn.disabled = false;
+        } else if (data.status === "running") {
+            setPhase("building");
+            connectSSE();
+        } else {
+            setPhase("ideation");
+            ideaInput.value = data.idea || "";
+        }
+    } catch (err) {
+        toast("Restore failed: " + err.message, "error");
+    }
+}
+
+async function deleteSession(id, itemEl) {
+    try {
+        const res = await authFetch(`/sessions/${id}`, { method: "DELETE" });
+        if (!res || !res.ok) { toast("Failed to delete session", "error"); return; }
+        itemEl.remove();
+        if (sessionId === id) { sessionId = null; setPhase("ideation"); }
+        const remaining = sessionList.querySelectorAll(".session-item");
+        if (remaining.length === 0) {
+            sessionList.innerHTML = '<div class="session-empty">No sessions yet &mdash; describe your idea above to get started</div>';
+        }
+        sessionList.querySelectorAll(".session-group-header").forEach((h) => {
+            if (!h.nextElementSibling || h.nextElementSibling.classList.contains("session-group-header") || h.nextElementSibling.classList.contains("session-empty")) h.remove();
+        });
+    } catch { toast("Delete failed", "error"); }
 }
 
 // ── Sidebar: Config ──
 async function loadConfig() {
     try {
         const clientId = getClientId();
-        const res = await fetch(`/providers?client_id=${encodeURIComponent(clientId)}`);
+        const res = await authFetch(`/providers?client_id=${encodeURIComponent(clientId)}`);
         const cfg = await res.json();
 
         providerSelect.innerHTML = "";
@@ -648,7 +831,7 @@ function openKeysModal() {
 
 async function loadKeysList() {
     try {
-        const res = await fetch("/providers");
+        const res = await authFetch("/providers");
         const data = await res.json();
         keysList.innerHTML = (data.providers || []).map((p) => `
             <div style="display:flex;align-items:center;gap:8px;padding:8px;background:var(--bg-surface-raised);border-radius:var(--radius-sm);">
@@ -668,7 +851,7 @@ window._saveKey = async function (provider, btn) {
     const key = input.value.trim();
     if (!key) return;
     try {
-        await fetch(`/providers/${provider}/key`, {
+        await authFetch(`/providers/${provider}/key`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ api_key: key, client_id: getClientId() }),
@@ -685,7 +868,7 @@ window._saveKey = async function (provider, btn) {
 async function loadMemories() {
     if (!sessionId) return;
     try {
-        const res = await fetch(`/memory/${sessionId}`);
+        const res = await authFetch(`/memory/${sessionId}`);
         const data = await res.json();
         const memories = data.memories || [];
         if (memories.length === 0) { memorySection.style.display = "none"; return; }
@@ -701,6 +884,15 @@ async function loadMemories() {
 }
 
 // ── Preview ──
+function resetInlineEditor() {
+    inlineFileTabs.innerHTML = "";
+    Object.values(inlineModels).forEach((m) => m.dispose());
+    inlineModels = {};
+    const skeleton = document.getElementById("inlineEditorSkeleton");
+    if (skeleton) skeleton.classList.remove("hidden");
+    $("#inlineFileCount").textContent = "Waiting for code...";
+}
+
 async function startPreview() {
     if (!sessionId) return;
     launchPreviewBtn.disabled = true;
@@ -709,7 +901,7 @@ async function startPreview() {
     previewOverlay.textContent = "Preparing preview...";
     previewOverlay.classList.remove("hidden");
     try {
-        const res = await fetch(`/preview/${sessionId}/start`, { method: "POST" });
+        const res = await authFetch(`/preview/${sessionId}/start`, { method: "POST" });
         const data = await res.json();
         if (!res.ok) {
             throw new Error(data.detail || data.message || "Preview failed");
@@ -718,6 +910,10 @@ async function startPreview() {
         previewFrame.src = previewUrl;
         previewFrame.style.display = "block";
         previewOverlay.classList.add("hidden");
+        const previewSkeleton = document.getElementById("previewSkeleton");
+        if (previewSkeleton) previewSkeleton.classList.add("hidden");
+        const urlBar = document.getElementById("previewUrl");
+        if (urlBar) urlBar.textContent = previewUrl;
         stopPreviewBtn.disabled = false;
         refreshPreviewBtn.disabled = false;
         toast(`Preview started${data.mode ? ` (${data.mode})` : ""}`, "success");
@@ -735,7 +931,7 @@ async function startPreview() {
 
 async function stopPreview() {
     if (!sessionId) return;
-    try { await fetch(`/preview/${sessionId}/stop`, { method: "POST" }); } catch {}
+    try { await authFetch(`/preview/${sessionId}/stop`, { method: "POST" }); } catch {}
     previewFrame.src = "about:blank";
     previewFrame.style.display = "none";
     previewOverlay.textContent = 'Click "Start Preview" to launch';
@@ -749,7 +945,7 @@ async function stopPreview() {
 async function handleDownload() {
     if (!sessionId) return;
     try {
-        const res = await fetch(`/files/${sessionId}`);
+        const res = await authFetch(`/files/${sessionId}`);
         const data = await res.json();
         const files = data.files || {};
         if (Object.keys(files).length === 0) { toast("No files to download", "error"); return; }
@@ -807,16 +1003,36 @@ $("#keysModalClose").onclick = () => keysModal.close();
 sidebarToggle.onclick = () => appShell.classList.toggle("sidebar-collapsed");
 newSessionBtn.onclick = () => { setPhase("ideation"); sessionId = null; };
 
+const logoutBtn = document.getElementById("logoutBtn");
+if (logoutBtn) {
+    logoutBtn.onclick = () => {
+        localStorage.removeItem("devagent_token");
+        localStorage.removeItem("devagent_user");
+        window.location.href = "/login";
+    };
+}
+
 launchPreviewBtn.onclick = startPreview;
 stopPreviewBtn.onclick = stopPreview;
 refreshPreviewBtn.onclick = () => { if (previewFrame.src) previewFrame.src = previewFrame.src; };
+
+$$(".viewport-btn").forEach((btn) => {
+    btn.onclick = () => {
+        $$(".viewport-btn").forEach((b) => b.classList.remove("active"));
+        btn.classList.add("active");
+        const vp = btn.dataset.viewport;
+        const sizes = { desktop: "100%", tablet: "768px", mobile: "375px" };
+        previewFrame.style.maxWidth = sizes[vp] || "100%";
+        previewFrame.style.margin = vp === "desktop" ? "0" : "0 auto";
+    };
+});
 
 downloadBtn.onclick = handleDownload;
 
 providerSelect.onchange = async () => {
     try {
         const clientId = getClientId();
-        const res = await fetch(`/providers?client_id=${encodeURIComponent(clientId)}`);
+        const res = await authFetch(`/providers?client_id=${encodeURIComponent(clientId)}`);
         const cfg = await res.json();
         updateModels(cfg);
         providerBadge.textContent = `${providerSelect.value} / ${modelSelect.value || ""}`;
@@ -824,7 +1040,22 @@ providerSelect.onchange = async () => {
 };
 
 // ── Init ──
-loadConfig();
-setPhase("ideation");
+(function initAuth() {
+    const token = getAuthToken();
+    if (!token) { window.location.href = "/login"; return; }
+    loadConfig();
+    loadSessions();
+    setPhase("ideation");
+
+    // Show user email in sidebar if available
+    const userInfo = localStorage.getItem("devagent_user");
+    if (userInfo) {
+        try {
+            const u = JSON.parse(userInfo);
+            const el = document.getElementById("userEmail");
+            if (el) el.textContent = u.email || "";
+        } catch {}
+    }
+})();
 
 })();

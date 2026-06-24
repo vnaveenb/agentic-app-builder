@@ -190,3 +190,23 @@ class ProvidersResponse(BaseModel):
 class ProviderKeyRequest(BaseModel):
     client_id: str = Field(..., min_length=1, max_length=64)
     api_key: str = Field(..., min_length=1, max_length=400)
+
+
+# ── Auth models ──────────────────────────────────────────────────────────────
+
+
+class UserInfoResponse(BaseModel):
+    user_id: str
+    email: str
+    is_admin: bool
+    created_at: str = ""
+
+
+class SessionRestoreResponse(BaseModel):
+    session_id: str
+    idea: str
+    runtime: str
+    status: str
+    files: dict[str, str] = Field(default_factory=dict)
+    plan: dict | None = None
+    backend: str = "langgraph"

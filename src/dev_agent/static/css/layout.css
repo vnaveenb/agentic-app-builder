@@ -88,6 +88,22 @@
     border-top: 1px solid var(--border-default);
 }
 
+.user-info {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: var(--space-2);
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+}
+
+.user-email {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 160px;
+}
+
 /* ── Main Area ── */
 .main-area {
     display: flex;

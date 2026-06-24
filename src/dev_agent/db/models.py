@@ -25,12 +25,31 @@ class Base(DeclarativeBase):
     pass
 
 
+class User(Base):
+    """Registered user account — linked to Firebase Auth by UID."""
+
+    __tablename__ = "users"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    firebase_uid: Mapped[str] = mapped_column(String(128), nullable=False, unique=True, index=True)
+    email: Mapped[str] = mapped_column(String(255), nullable=False, unique=True, index=True)
+    is_admin: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    sessions: Mapped[list[Session]] = relationship(back_populates="user")
+
+
 class Session(Base):
     """A generation session — one per /generate call."""
 
     __tablename__ = "sessions"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id"), nullable=True, index=True
+    )
     idea: Mapped[str] = mapped_column(Text, nullable=False)
     runtime: Mapped[str] = mapped_column(String(20), nullable=False)
     backend: Mapped[str] = mapped_column(String(20), default="langgraph")
@@ -46,7 +65,7 @@ class Session(Base):
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
 
-    # Relationships
+    user: Mapped[User | None] = relationship(back_populates="sessions")
     versions: Mapped[list[Version]] = relationship(back_populates="session", order_by="Version.version_number")
     messages: Mapped[list[Message]] = relationship(back_populates="session", order_by="Message.created_at")
 

@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Sign In — AI Dev Agent</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    :root {
+      --bg-base: #0f0f11;
+      --bg-surface: #1a1a2e;
+      --bg-elevated: #252540;
+      --text-primary: #f0f0f5;
+      --text-secondary: #a0a0b8;
+      --accent: #8b5cf6;
+      --accent-hover: #7c3aed;
+      --success: #10b981;
+      --error: #ef4444;
+      --radius: 12px;
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--bg-base);
+      color: var(--text-primary);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .login-card {
+      background: var(--bg-surface);
+      border: 1px solid rgba(139, 92, 246, 0.15);
+      border-radius: var(--radius);
+      padding: 2.5rem;
+      width: 100%;
+      max-width: 400px;
+      text-align: center;
+    }
+    .login-card h1 {
+      font-size: 1.5rem;
+      margin-bottom: 0.5rem;
+      background: linear-gradient(135deg, #8b5cf6, #06b6d4);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    .login-card p {
+      color: var(--text-secondary);
+      font-size: 0.9rem;
+      margin-bottom: 1.5rem;
+    }
+    .form-group {
+      margin-bottom: 1rem;
+      text-align: left;
+    }
+    .form-group label {
+      display: block;
+      font-size: 0.8rem;
+      color: var(--text-secondary);
+      margin-bottom: 0.3rem;
+    }
+    .form-group input {
+      width: 100%;
+      padding: 0.75rem 1rem;
+      background: var(--bg-elevated);
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 8px;
+      color: var(--text-primary);
+      font-size: 0.95rem;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+    .form-group input:focus {
+      border-color: var(--accent);
+    }
+    .btn {
+      display: inline-block;
+      width: 100%;
+      padding: 0.8rem;
+      margin-top: 0.5rem;
+      background: var(--accent);
+      color: #fff;
+      font-size: 0.95rem;
+      font-weight: 600;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    .btn:hover { background: var(--accent-hover); }
+    .btn:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+    .msg {
+      margin-top: 1rem;
+      font-size: 0.85rem;
+      min-height: 1.2em;
+    }
+    .msg.success { color: var(--success); }
+    .msg.error { color: var(--error); }
+    .spinner {
+      display: inline-block;
+      width: 18px;
+      height: 18px;
+      border: 2px solid rgba(255,255,255,0.3);
+      border-top-color: #fff;
+      border-radius: 50%;
+      animation: spin 0.6s linear infinite;
+      vertical-align: middle;
+      margin-right: 0.5rem;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+  <div class="login-card">
+    <h1>AI Dev Agent</h1>
+
+    <!-- Step 1: Email input -->
+    <div id="step-email">
+      <p>Sign in with a magic link — no password needed.</p>
+      <div class="form-group">
+        <label for="email">Email address</label>
+        <input type="email" id="email" placeholder="you@example.com" autocomplete="email" />
+      </div>
+      <button class="btn" id="send-link-btn">Send Magic Link</button>
+    </div>
+
+    <!-- Step 2: Link sent confirmation -->
+    <div id="step-sent" style="display:none;">
+      <p>Check your inbox! We sent a sign-in link to <strong id="sent-email"></strong>.</p>
+      <p style="margin-top:0.5rem; font-size:0.8rem;">Click the link in the email to continue. You can close this tab.</p>
+      <button class="btn" id="resend-btn" style="margin-top:1rem; background: var(--bg-elevated);">Resend Link</button>
+    </div>
+
+    <!-- Step 3: Completing sign-in (shown when returning from email link) -->
+    <div id="step-completing" style="display:none;">
+      <p><span class="spinner"></span>Completing sign-in...</p>
+    </div>
+
+    <div class="msg" id="msg"></div>
+  </div>
+
+  <!-- Firebase JS SDK (compat mode for simpler API) -->
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
+  <script>
+    // Firebase config — fetched from backend /auth/config endpoint
+    let FIREBASE_CONFIG = null;
+    let auth = null;
+
+    const emailInput = document.getElementById("email");
+    const sendBtn = document.getElementById("send-link-btn");
+    const resendBtn = document.getElementById("resend-btn");
+    const msg = document.getElementById("msg");
+    const stepEmail = document.getElementById("step-email");
+    const stepSent = document.getElementById("step-sent");
+    const stepCompleting = document.getElementById("step-completing");
+    const sentEmail = document.getElementById("sent-email");
+
+    function showMsg(text, type = "error") {
+      msg.textContent = text;
+      msg.className = "msg " + type;
+    }
+
+    async function initFirebase() {
+      try {
+        const res = await fetch("/auth/config");
+        FIREBASE_CONFIG = await res.json();
+        if (!FIREBASE_CONFIG.apiKey) {
+          showMsg("Firebase not configured. Set FIREBASE_API_KEY, FIREBASE_AUTH_DOMAIN, FIREBASE_PROJECT_ID in .env");
+          sendBtn.disabled = true;
+          return false;
+        }
+        firebase.initializeApp(FIREBASE_CONFIG);
+        auth = firebase.auth();
+        return true;
+      } catch (err) {
+        showMsg("Failed to load Firebase config: " + err.message);
+        sendBtn.disabled = true;
+        return false;
+      }
+    }
+
+    const actionCodeSettings = {
+      url: window.location.origin + "/login",
+      handleCodeInApp: true,
+    };
+
+    async function sendLink() {
+      if (!auth) return;
+      const email = emailInput.value.trim();
+      if (!email) { showMsg("Please enter your email."); return; }
+
+      sendBtn.disabled = true;
+      sendBtn.innerHTML = '<span class="spinner"></span>Sending...';
+      showMsg("");
+
+      try {
+        await auth.sendSignInLinkToEmail(email, actionCodeSettings);
+        window.localStorage.setItem("emailForSignIn", email);
+        stepEmail.style.display = "none";
+        stepSent.style.display = "block";
+        sentEmail.textContent = email;
+        showMsg("Link sent! Check your email.", "success");
+      } catch (err) {
+        showMsg(err.message);
+      } finally {
+        sendBtn.disabled = false;
+        sendBtn.textContent = "Send Magic Link";
+      }
+    }
+
+    async function completeSignIn() {
+      if (!auth) return false;
+      if (!auth.isSignInWithEmailLink(window.location.href)) return false;
+
+      stepEmail.style.display = "none";
+      stepSent.style.display = "none";
+      stepCompleting.style.display = "block";
+
+      let email = window.localStorage.getItem("emailForSignIn");
+      if (!email) {
+        email = window.prompt("Please enter your email to confirm sign-in:");
+        if (!email) { showMsg("Email required to complete sign-in."); return false; }
+      }
+
+      try {
+        const result = await auth.signInWithEmailLink(email, window.location.href);
+        window.localStorage.removeItem("emailForSignIn");
+
+        const idToken = await result.user.getIdToken();
+
+        // Verify with backend before storing token
+        const resp = await fetch("/auth/verify", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id_token: idToken }),
+        });
+        if (resp.ok) {
+          const user = await resp.json();
+          window.localStorage.setItem("devagent_token", idToken);
+          window.localStorage.setItem("devagent_user", JSON.stringify(user));
+          window.location.href = "/";
+          return true;
+        } else {
+          await auth.signOut();
+          stepCompleting.style.display = "none";
+          stepEmail.style.display = "block";
+          const errData = await resp.json().catch(() => ({}));
+          showMsg(errData.detail || "Backend could not verify token. Check server Firebase config.");
+          return false;
+        }
+      } catch (err) {
+        stepCompleting.style.display = "none";
+        stepEmail.style.display = "block";
+        showMsg("Sign-in failed: " + err.message);
+        return false;
+      }
+    }
+
+    // On page load: init Firebase, then check if returning from email link
+    (async () => {
+      const ok = await initFirebase();
+      if (!ok) return;
+
+      const completed = await completeSignIn();
+      if (!completed) {
+        // Check if already signed in — but verify with backend first
+        auth.onAuthStateChanged(async (user) => {
+          if (user) {
+            const idToken = await user.getIdToken(true);
+            // Verify with backend before redirecting
+            try {
+              const resp = await fetch("/auth/verify", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ id_token: idToken }),
+              });
+              if (resp.ok) {
+                const userData = await resp.json();
+                window.localStorage.setItem("devagent_token", idToken);
+                window.localStorage.setItem("devagent_user", JSON.stringify(userData));
+                window.location.href = "/";
+              } else {
+                // Backend can't verify — sign out to break loop
+                await auth.signOut();
+                showMsg("Backend authentication failed. Check server Firebase config.", "error");
+              }
+            } catch (err) {
+              await auth.signOut();
+              showMsg("Server unreachable: " + err.message, "error");
+            }
+          }
+        });
+      }
+    })();
+
+    sendBtn.addEventListener("click", sendLink);
+    resendBtn.addEventListener("click", () => {
+      stepSent.style.display = "none";
+      stepEmail.style.display = "block";
+      showMsg("");
+    });
+    emailInput.addEventListener("keydown", (e) => { if (e.key === "Enter") sendLink(); });
+  </script>
+</body>
+</html>

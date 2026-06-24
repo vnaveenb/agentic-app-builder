@@ -104,7 +104,7 @@
 
 .agent-name {
     font-size: var(--text-sm);
-    font-weight: 600;
+    font-weight: 700;
     color: var(--text-primary);
     text-transform: capitalize;
 }
@@ -113,12 +113,20 @@
     font-size: var(--text-xs);
     color: var(--text-muted);
     margin-left: auto;
+    font-style: italic;
 }
 
 .agent-timer-text {
     font-family: var(--font-mono);
     font-size: var(--text-xs);
     color: var(--text-muted);
+}
+
+.agent-char-count {
+    font-family: var(--font-mono);
+    font-size: 0.6rem;
+    color: var(--text-muted);
+    opacity: 0.6;
 }
 
 .agent-toggle {
@@ -162,9 +170,22 @@
 
 .agent-block[data-status="running"] { border-color: rgba(139, 92, 246, 0.3); }
 .agent-block[data-status="running"] .agent-dot { animation: dotPulse 1.2s ease-in-out infinite; }
+.agent-block[data-status="running"] .agent-stream {
+    background: linear-gradient(180deg, transparent 90%, rgba(139, 92, 246, 0.03) 100%);
+}
 
 .agent-block[data-status="done"] .agent-dot { background: var(--accent-emerald); }
-.agent-block[data-status="done"] .agent-status { color: var(--accent-emerald); }
+.agent-block[data-status="done"] .agent-status { color: var(--accent-emerald); font-style: normal; }
+
+.agent-block-summary {
+    padding: var(--space-1) var(--space-4) var(--space-2);
+    font-size: var(--text-xs);
+    color: var(--text-muted);
+    display: flex;
+    gap: var(--space-3);
+}
+.agent-block-summary .file-count { color: var(--accent-primary); font-weight: 600; }
+.agent-block-summary .line-count { color: var(--accent-cyan); }
 
 /* Per-agent dot colors when running */
 .agent-block[data-agent="planner"][data-status="running"] .agent-dot { background: var(--agent-planner); }

@@ -15,11 +15,12 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from sqlalchemy import text as select_text
+from sqlalchemy import delete as sa_delete, select, text as select_text
 
 from src.dev_agent import config
+from src.dev_agent.auth.service import verify_firebase_token
 from src.dev_agent.cache import (
     cache_session_state,
     close_redis,
@@ -28,7 +29,7 @@ from src.dev_agent.cache import (
     health_check as redis_health_check,
 )
 from src.dev_agent.db.database import async_session_factory, close_db, init_db
-from src.dev_agent.db.models import Session as DBSession
+from src.dev_agent.db.models import Message as DBMessage, Session as DBSession, User as DBUser, Version as DBVersion
 from src.dev_agent.llm import LLMContext, build_llm_context
 from src.dev_agent.agents.planner import planner_node
 from src.dev_agent.pipeline.base import PipelineBackend
@@ -55,9 +56,11 @@ from src.dev_agent.schemas import (
     ProviderKeyRequest,
     ProvidersResponse,
     SessionListResponse,
+    SessionRestoreResponse,
     SessionSummary,
     StatusResponse,
     UpdateFilesRequest,
+    UserInfoResponse,
 )
 from src.dev_agent.versioning.differ import compute_diff
 from src.dev_agent.versioning.store import (
@@ -104,6 +107,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logger.info("Project 7 — AI Dev Agent starting up")
     await init_db()
     logger.info("Database initialized")
+    try:
+        from src.dev_agent.db.seed import seed_admin_user
+        await seed_admin_user()
+    except Exception as seed_exc:
+        logger.warning("Admin seed skipped: %s", seed_exc)
     yield
     # Cleanup all preview servers on shutdown
     preview_server.cleanup_all()
@@ -118,6 +126,67 @@ app.mount(
     StaticFiles(directory=str(pathlib.Path(__file__).parent / "static")),
     name="static",
 )
+
+_LOGIN_HTML = pathlib.Path(__file__).parent / "static" / "login.html"
+
+_PUBLIC_PATHS = frozenset({"/health", "/login", "/auth/verify", "/auth/config"})
+_PUBLIC_PREFIXES = ("/static/",)
+
+
+@app.middleware("http")
+async def auth_middleware(request: Request, call_next):  # type: ignore[no-untyped-def]
+    """Verify Firebase ID token on protected routes."""
+    path = request.url.path
+    if path in _PUBLIC_PATHS or any(path.startswith(p) for p in _PUBLIC_PREFIXES):
+        return await call_next(request)
+
+    # Extract token from header or query param (SSE fallback)
+    token: str | None = None
+    auth_header = request.headers.get("authorization", "")
+    if auth_header.startswith("Bearer "):
+        token = auth_header[7:]
+    if not token:
+        token = request.query_params.get("token")
+
+    if not token:
+        # Allow unauthenticated access to / and /preview/* (frontend handles redirect)
+        if path == "/" or path.startswith("/preview/"):
+            return await call_next(request)
+        return JSONResponse({"detail": "Not authenticated"}, status_code=401)
+
+    try:
+        claims = verify_firebase_token(token)
+        request.state.firebase_uid = claims["uid"]
+        request.state.user_email = claims.get("email", "")
+        request.state.is_admin = claims.get("admin", False)
+    except RuntimeError:
+        return JSONResponse({"detail": "Firebase Auth not configured on server"}, status_code=503)
+    except Exception:
+        if path == "/" or path.startswith("/preview/"):
+            return await call_next(request)
+        return JSONResponse({"detail": "Invalid or expired token"}, status_code=401)
+
+    # Ensure local User record exists (auto-provision on first auth)
+    try:
+        async with async_session_factory() as db:
+            result = await db.execute(
+                select(DBUser).where(DBUser.firebase_uid == claims["uid"])
+            )
+            user = result.scalar_one_or_none()
+            if not user:
+                user = DBUser(
+                    firebase_uid=claims["uid"],
+                    email=claims.get("email", ""),
+                    is_admin=claims.get("admin", False),
+                )
+                db.add(user)
+                await db.commit()
+                await db.refresh(user)
+            request.state.user_id = str(user.id)
+    except Exception:
+        request.state.user_id = None
+
+    return await call_next(request)
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
@@ -152,8 +221,143 @@ def ui() -> FileResponse:
     return FileResponse(str(_UI))
 
 
+@app.get("/login")
+def login_page() -> FileResponse:
+    return FileResponse(str(_LOGIN_HTML))
+
+
+@app.post("/auth/verify", response_model=UserInfoResponse)
+async def auth_verify(request: Request) -> UserInfoResponse:
+    """Verify a Firebase ID token and return user info. Used by frontend on page load."""
+    body = await request.json()
+    id_token = body.get("id_token", "")
+    if not id_token:
+        raise HTTPException(400, "id_token required")
+
+    try:
+        claims = verify_firebase_token(id_token)
+    except RuntimeError as e:
+        raise HTTPException(503, f"Firebase not configured: {e}")
+    except Exception:
+        raise HTTPException(401, "Invalid token")
+
+    # Ensure local user exists
+    async with async_session_factory() as db:
+        result = await db.execute(
+            select(DBUser).where(DBUser.firebase_uid == claims["uid"])
+        )
+        user = result.scalar_one_or_none()
+        if not user:
+            user = DBUser(
+                firebase_uid=claims["uid"],
+                email=claims.get("email", ""),
+                is_admin=claims.get("admin", False),
+            )
+            db.add(user)
+            await db.commit()
+            await db.refresh(user)
+
+    return UserInfoResponse(
+        user_id=str(user.id),
+        email=user.email,
+        is_admin=user.is_admin,
+        created_at=user.created_at.isoformat() if user.created_at else "",
+    )
+
+
+@app.get("/auth/config")
+async def auth_config() -> dict[str, str]:
+    """Return Firebase JS SDK config (public values only)."""
+    return {
+        "apiKey": os.environ.get("FIREBASE_API_KEY", ""),
+        "authDomain": os.environ.get("FIREBASE_AUTH_DOMAIN", ""),
+        "projectId": os.environ.get("FIREBASE_PROJECT_ID", ""),
+    }
+
+
+# ── Session restore endpoint ─────────────────────────────────────────────────
+
+
+@app.get("/sessions/{session_id}/restore", response_model=SessionRestoreResponse)
+async def restore_session(session_id: str, request: Request) -> SessionRestoreResponse:
+    """Restore a session from DB into memory and return its data."""
+    state = _session_states.get(session_id)
+    if state:
+        plan_dict = None
+        if state.get("plan"):
+            try:
+                plan_dict = state["plan"].model_dump() if hasattr(state["plan"], "model_dump") else state["plan"]
+            except Exception:
+                plan_dict = None
+        return SessionRestoreResponse(
+            session_id=session_id,
+            idea=state["idea"],
+            runtime=state["runtime"],
+            status=state["status"],
+            files=state.get("files", {}),
+            plan=plan_dict,
+            backend=_session_backends.get(session_id, "langgraph"),
+        )
+
+    # Load from DB
+    async with async_session_factory() as db:
+        result = await db.execute(select(DBSession).where(DBSession.id == uuid.UUID(session_id)))
+        db_session = result.scalar_one_or_none()
+        if not db_session:
+            raise HTTPException(404, "Session not found")
+
+        # Get current version files
+        version_result = await db.execute(
+            select(DBVersion)
+            .where(DBVersion.session_id == uuid.UUID(session_id))
+            .where(DBVersion.is_current.is_(True))
+            .order_by(DBVersion.version_number.desc())
+            .limit(1)
+        )
+        current_version = version_result.scalar_one_or_none()
+        files = current_version.files_snapshot if current_version else {}
+
+    # Rehydrate into memory
+    rehydrated: DevPipelineState = {
+        "session_id": session_id,
+        "idea": db_session.idea,
+        "runtime": db_session.runtime,
+        "plan": None,
+        "files": files,
+        "test_report": None,
+        "preview": None,
+        "review_notes": [],
+        "iteration": 0,
+        "max_iterations": db_session.max_iterations,
+        "status": db_session.status if db_session.status in ("done", "error") else "done",
+        "errors": db_session.errors or [],
+        "current_agent": "",
+        "event_queue": None,
+        "user_feedback": "",
+        "llm_context": None,
+    }
+    if db_session.plan:
+        try:
+            rehydrated["plan"] = Plan.model_validate(db_session.plan)
+        except Exception:
+            pass
+
+    _session_states[session_id] = rehydrated
+    _session_backends[session_id] = db_session.backend
+
+    return SessionRestoreResponse(
+        session_id=session_id,
+        idea=db_session.idea,
+        runtime=db_session.runtime,
+        status=rehydrated["status"],
+        files=files,
+        plan=db_session.plan,
+        backend=db_session.backend,
+    )
+
+
 @app.post("/generate", response_model=GenerateResponse)
-async def generate(req: GenerateRequest) -> GenerateResponse:
+async def generate(req: GenerateRequest, request: Request) -> GenerateResponse:
     session_id = str(uuid.uuid4())
     queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
     _event_queues[session_id] = queue
@@ -184,10 +388,12 @@ async def generate(req: GenerateRequest) -> GenerateResponse:
     _session_backends[session_id] = req.backend
 
     # Create session record in DB immediately (so chat/messages can reference it)
+    user_id = getattr(request.state, "user_id", None)
     try:
         async with async_session_factory() as db:
             db_session = DBSession(
                 id=uuid.UUID(session_id),
+                user_id=uuid.UUID(user_id) if user_id else None,
                 idea=req.idea,
                 runtime=req.runtime,
                 backend=req.backend,
@@ -511,17 +717,21 @@ async def diff_versions(session_id: str, v1: int, v2: int) -> DiffResponse:
 
 
 @app.get("/sessions", response_model=SessionListResponse)
-async def list_sessions() -> SessionListResponse:
-    """List all sessions — from DB, plus any in-memory-only sessions."""
-    from sqlalchemy import select
+async def list_sessions(request: Request) -> SessionListResponse:
+    """List sessions scoped to the authenticated user (admin sees all)."""
+    user_id = getattr(request.state, "user_id", None)
+    is_admin = getattr(request.state, "is_admin", False)
 
     sessions: list[SessionSummary] = []
 
     # DB sessions
     async with async_session_factory() as db:
-        result = await db.execute(
-            select(DBSession).order_by(DBSession.created_at.desc()).limit(50)
-        )
+        query = select(DBSession).order_by(DBSession.created_at.desc()).limit(50)
+        if user_id and not is_admin:
+            query = query.where(
+                (DBSession.user_id == uuid.UUID(user_id)) | (DBSession.user_id.is_(None))
+            )
+        result = await db.execute(query)
         for s in result.scalars().all():
             sessions.append(SessionSummary(
                 session_id=str(s.id),
@@ -546,6 +756,31 @@ async def list_sessions() -> SessionListResponse:
             ))
 
     return SessionListResponse(sessions=sessions)
+
+
+@app.delete("/sessions/{session_id}")
+async def delete_session(session_id: str, request: Request) -> JSONResponse:
+    """Delete a session and its related data. Users can only delete their own; admins can delete any."""
+    user_id = getattr(request.state, "user_id", None)
+    is_admin = getattr(request.state, "is_admin", False)
+
+    sid = uuid.UUID(session_id)
+    async with async_session_factory() as db:
+        row = await db.execute(select(DBSession).where(DBSession.id == sid))
+        session = row.scalar_one_or_none()
+        if not session:
+            raise HTTPException(404, "Session not found")
+        if not is_admin and user_id and session.user_id and str(session.user_id) != user_id:
+            raise HTTPException(403, "Not authorized to delete this session")
+        await db.execute(sa_delete(DBVersion).where(DBVersion.session_id == sid))
+        await db.execute(sa_delete(DBMessage).where(DBMessage.session_id == sid))
+        await db.execute(sa_delete(DBSession).where(DBSession.id == sid))
+        await db.commit()
+
+    _session_states.pop(session_id, None)
+    _session_backends.pop(session_id, None)
+
+    return JSONResponse({"status": "deleted"})
 
 
 # ── Chat endpoints ────────────────────────────────────────────────────────────
@@ -813,9 +1048,29 @@ async def remove_provider_key(provider: str, client_id: str) -> dict[str, str]:
 async def get_files(session_id: str) -> dict[str, Any]:
     """Return generated files for a session (fallback if SSE delivery fails)."""
     state = _session_states.get(session_id)
-    if not state:
-        raise HTTPException(404, "Session not found")
-    return {"files": state.get("files", {}), "runtime": state.get("runtime", "")}
+    if state:
+        return {"files": state.get("files", {}), "runtime": state.get("runtime", "")}
+
+    # DB fallback — load from current version snapshot
+    async with async_session_factory() as db:
+        sess_result = await db.execute(
+            select(DBSession).where(DBSession.id == uuid.UUID(session_id))
+        )
+        db_session = sess_result.scalar_one_or_none()
+        if not db_session:
+            raise HTTPException(404, "Session not found")
+
+        version_result = await db.execute(
+            select(DBVersion)
+            .where(DBVersion.session_id == uuid.UUID(session_id))
+            .where(DBVersion.is_current.is_(True))
+            .order_by(DBVersion.version_number.desc())
+            .limit(1)
+        )
+        current_version = version_result.scalar_one_or_none()
+        files = current_version.files_snapshot if current_version else {}
+
+    return {"files": files, "runtime": db_session.runtime}
 
 
 # ── Preview endpoints ─────────────────────────────────────────────────────────

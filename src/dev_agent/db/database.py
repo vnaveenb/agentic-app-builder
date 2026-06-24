@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import logging
 import os
 
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+
+logger = logging.getLogger(__name__)
 
 DATABASE_URL = os.environ.get(
     "DATABASE_URL",
@@ -32,12 +36,21 @@ async def get_session() -> AsyncSession:
         return session
 
 
+async def _apply_migrations(conn) -> None:  # type: ignore[no-untyped-def]
+    """Add columns that create_all() can't add to pre-existing tables."""
+    await conn.execute(text(
+        "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS user_id UUID REFERENCES users(id)"
+    ))
+    logger.info("Schema migrations applied")
+
+
 async def init_db() -> None:
     """Create all tables (for development — use Alembic in production)."""
     from src.dev_agent.db.models import Base
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        await _apply_migrations(conn)
 
 
 async def close_db() -> None:

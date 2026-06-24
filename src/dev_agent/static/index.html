@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AI Dev Agent</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0' y1='0' x2='1' y2='1'><stop offset='0%25' stop-color='%238b5cf6'/><stop offset='100%25' stop-color='%2306b6d4'/></linearGradient></defs><polygon points='50,10 10,30 50,50 90,30' fill='url(%23g)'/><polygon points='10,45 50,65 90,45' fill='url(%23g)' opacity='.7'/><polygon points='10,60 50,80 90,60' fill='url(%23g)' opacity='.4'/></svg>">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -71,6 +72,12 @@
             </div>
 
             <div class="sidebar-footer">
+                <div class="user-info" id="userInfo">
+                    <span class="user-email" id="userEmail"></span>
+                    <button class="btn-icon-sm" id="logoutBtn" title="Sign out">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+                    </button>
+                </div>
                 <div class="provider-badge" id="providerBadge">Connecting...</div>
             </div>
         </aside>
@@ -178,13 +185,21 @@
                         <div class="stream-area" id="buildStream">
                             <!-- Agent thinking blocks rendered here -->
                         </div>
-                        <div class="inline-editor-area" id="inlineEditorArea" style="display:none;">
+                        <div class="inline-editor-area" id="inlineEditorArea">
                             <div class="inline-editor-header">
                                 <span class="inline-editor-title">Generated Files</span>
-                                <span class="inline-file-count" id="inlineFileCount"></span>
+                                <span class="inline-file-count" id="inlineFileCount">Waiting for code...</span>
                             </div>
                             <div class="inline-file-tabs" id="inlineFileTabs"></div>
-                            <div class="inline-monaco" id="inlineMonaco"></div>
+                            <div class="inline-monaco" id="inlineMonaco">
+                                <div class="preview-skeleton" id="inlineEditorSkeleton">
+                                    <div class="skeleton skeleton-line" style="width:70%"></div>
+                                    <div class="skeleton skeleton-line" style="width:50%"></div>
+                                    <div class="skeleton skeleton-line" style="width:85%"></div>
+                                    <div class="skeleton skeleton-line" style="width:40%"></div>
+                                    <div class="skeleton skeleton-line" style="width:65%"></div>
+                                </div>
+                            </div>
                         </div>
                     </div>
                 </section>
@@ -208,8 +223,26 @@
                                 <button class="btn-sm" id="launchPreviewBtn" disabled>Start Preview</button>
                                 <button class="btn-sm btn-danger" id="stopPreviewBtn" disabled>Stop</button>
                                 <button class="btn-sm" id="refreshPreviewBtn" disabled>Reload</button>
+                                <div class="preview-toolbar-right">
+                                    <button class="viewport-btn active" data-viewport="desktop" title="Desktop">
+                                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+                                    </button>
+                                    <button class="viewport-btn" data-viewport="tablet" title="Tablet">
+                                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="2" width="16" height="20" rx="2"/><line x1="12" y1="18" x2="12" y2="18"/></svg>
+                                    </button>
+                                    <button class="viewport-btn" data-viewport="mobile" title="Mobile">
+                                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="2" width="14" height="20" rx="2"/><line x1="12" y1="18" x2="12" y2="18"/></svg>
+                                    </button>
+                                    <span class="preview-url" id="previewUrl"></span>
+                                </div>
                             </div>
                             <div class="preview-container">
+                                <div class="preview-skeleton" id="previewSkeleton">
+                                    <div class="skeleton skeleton-line" style="width:90%"></div>
+                                    <div class="skeleton skeleton-line" style="width:75%"></div>
+                                    <div class="skeleton skeleton-line" style="width:60%"></div>
+                                    <div class="skeleton skeleton-line" style="width:80%"></div>
+                                </div>
                                 <div class="preview-overlay" id="previewOverlay">Click "Start Preview" to launch</div>
                                 <iframe class="preview-frame" id="previewFrame" sandbox="allow-scripts allow-forms allow-same-origin" style="display:none;"></iframe>
                             </div>

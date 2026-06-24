@@ -15,6 +15,9 @@ ENV/
 # Environment variables
 .env
 
+# Firebase service account (contains private key — never commit)
+firebase-service-account.json
+
 # IDE
 .vscode/
 .idea/
