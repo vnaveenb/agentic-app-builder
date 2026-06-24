@@ -186,7 +186,7 @@ def _start_static(session_id: str, files: dict[str, str]) -> dict[str, object]:
     _preview_mode[session_id] = "static"
     logger.info("Static preview ready for session=%s (%d files, no subprocess)",
                 session_id[:12], len(files))
-    return {"url": f"/preview/{session_id}", "status": "running", "mode": "static"}
+    return {"url": f"/preview/{session_id}/", "status": "running", "mode": "static"}
 
 
 # ── Build mode ───────────────────────────────────────────────────────────────────
@@ -208,7 +208,7 @@ async def _start_build(
     _preview_dirs[session_id] = dist   # serve root = built output
     _preview_mode[session_id] = "static"
     logger.info("Build preview ready for session=%s (serving %s)", session_id[:12], dist)
-    return {"url": f"/preview/{session_id}", "status": "running", "mode": "build"}
+    return {"url": f"/preview/{session_id}/", "status": "running", "mode": "build"}
 
 
 def resolve_static_file(session_id: str, path: str) -> pathlib.Path | None:
@@ -278,7 +278,7 @@ async def _start_server(
             _fail(f"Preview process exited after binding port {port}")
 
     logger.info("Server preview ready: session=%s pid=%d port=%d", session_id[:12], pid, port)
-    return {"port": port, "url": f"/preview/{session_id}", "status": "running",
+    return {"port": port, "url": f"/preview/{session_id}/", "status": "running",
             "pid": pid, "mode": "server"}
 
 

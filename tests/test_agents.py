@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -154,6 +155,54 @@ async def test_tester_merges_reports() -> None:
     # Sandbox counts are authoritative
     assert report.passed_count == 2
     assert report.failed_count == 0
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_tester_static_analysis_timeout_uses_sandbox_report() -> None:
+    sandbox_report = TestReport(
+        has_critical_bugs=False,
+        passed_count=1,
+        failed_count=0,
+        error_count=0,
+        output_summary="1 passed",
+        test_cases=[],
+        execution_time_ms=50,
+    )
+
+    async def _slow_static_analysis(_prompt: str) -> TestReport:
+        await asyncio.sleep(1)
+        return TestReport(
+            has_critical_bugs=True,
+            passed_count=0,
+            failed_count=0,
+            error_count=0,
+            output_summary="late report",
+            test_cases=[],
+            execution_time_ms=0,
+        )
+
+    mock_llm = MagicMock()
+    mock_structured = MagicMock()
+    mock_structured.ainvoke = _slow_static_analysis
+    mock_llm.with_structured_output.return_value = mock_structured
+
+    with (
+        patch("src.dev_agent.agents.tester.run_tests_in_sandbox", new_callable=AsyncMock, return_value=sandbox_report),
+        patch("src.dev_agent.agents.tester.get_llm_for_role", return_value=mock_llm),
+        patch("src.dev_agent.agents.tester._STATIC_ANALYSIS_TIMEOUT_SECONDS", 0.01),
+    ):
+        from src.dev_agent.agents.tester import tester_node
+
+        state = _make_state(
+            files={"app.py": "print('hello')", "test_app.py": "def test_x(): pass"},
+            runtime="python",
+        )
+        result = await tester_node(state)
+
+    report = result["test_report"]
+    assert report.has_critical_bugs is False
+    assert report.output_summary == "1 passed"
 
 
 # ── Reviewer Tests ────────────────────────────────────────────────────────────

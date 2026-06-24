@@ -704,18 +704,32 @@ async function loadMemories() {
 async function startPreview() {
     if (!sessionId) return;
     launchPreviewBtn.disabled = true;
+    previewFrame.src = "about:blank";
+    previewFrame.style.display = "none";
+    previewOverlay.textContent = "Preparing preview...";
+    previewOverlay.classList.remove("hidden");
     try {
         const res = await fetch(`/preview/${sessionId}/start`, { method: "POST" });
         const data = await res.json();
-        previewFrame.src = data.url;
+        if (!res.ok) {
+            throw new Error(data.detail || data.message || "Preview failed");
+        }
+        const previewUrl = data.url.endsWith("/") ? data.url : `${data.url}/`;
+        previewFrame.src = previewUrl;
         previewFrame.style.display = "block";
         previewOverlay.classList.add("hidden");
         stopPreviewBtn.disabled = false;
         refreshPreviewBtn.disabled = false;
-        toast("Preview started", "success");
+        toast(`Preview started${data.mode ? ` (${data.mode})` : ""}`, "success");
     } catch (err) {
-        toast("Preview failed", "error");
+        previewFrame.src = "about:blank";
+        previewFrame.style.display = "none";
+        previewOverlay.textContent = err.message || "Preview failed";
+        previewOverlay.classList.remove("hidden");
+        toast(`Preview failed: ${err.message || "unknown error"}`, "error");
         launchPreviewBtn.disabled = false;
+        stopPreviewBtn.disabled = true;
+        refreshPreviewBtn.disabled = true;
     }
 }
 
@@ -724,6 +738,7 @@ async function stopPreview() {
     try { await fetch(`/preview/${sessionId}/stop`, { method: "POST" }); } catch {}
     previewFrame.src = "about:blank";
     previewFrame.style.display = "none";
+    previewOverlay.textContent = 'Click "Start Preview" to launch';
     previewOverlay.classList.remove("hidden");
     launchPreviewBtn.disabled = false;
     stopPreviewBtn.disabled = true;

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from typing import Any
 
 from src.dev_agent.agents.prompts import STATIC_ANALYSIS_PROMPT
@@ -13,6 +14,8 @@ from src.dev_agent.pipeline.executor import run_tests_in_sandbox
 from src.dev_agent.pipeline.state import DevPipelineState, TestReport
 
 logger = logging.getLogger(__name__)
+
+_STATIC_ANALYSIS_TIMEOUT_SECONDS = float(os.getenv("TESTER_STATIC_ANALYSIS_TIMEOUT", "45"))
 
 
 async def tester_node(state: DevPipelineState) -> dict[str, Any]:
@@ -51,14 +54,25 @@ async def tester_node(state: DevPipelineState) -> dict[str, Any]:
     try:
         llm = get_llm_for_role("tester", state.get("llm_context"))
         structured_llm = llm.with_structured_output(TestReport)
-        llm_report: TestReport = await retry_llm_call(
-            structured_llm.ainvoke,
-            prompt,
-            agent_name="tester",
-            queue=queue,
-            task_id=1,
-            task_text="Performing static analysis",
+        llm_report = await asyncio.wait_for(
+            retry_llm_call(
+                structured_llm.ainvoke,
+                prompt,
+                max_retries=1,
+                base_delay=2.0,
+                agent_name="tester",
+                queue=queue,
+                task_id=1,
+                task_text="Performing static analysis",
+            ),
+            timeout=_STATIC_ANALYSIS_TIMEOUT_SECONDS,
         )  # type: ignore[assignment]
+    except TimeoutError:
+        logger.warning(
+            "LLM static analysis timed out after %.1fs; using sandbox-only results",
+            _STATIC_ANALYSIS_TIMEOUT_SECONDS,
+        )
+        llm_report = sandbox_report
     except Exception as exc:
         logger.warning("LLM static analysis failed: %s", exc)
         # Fall back to sandbox-only results
